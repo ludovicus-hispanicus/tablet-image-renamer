@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tablet Image Renamer</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Top Bar -->
+  <header id="topbar">
+    <button id="btn-browse" title="Open folder">Open Folder</button>
+    <span id="folder-path">No folder selected</span>
+    <div id="subfolder-nav">
+      <button id="btn-prev" disabled>&larr; Prev</button>
+      <span id="subfolder-info">-</span>
+      <button id="btn-next" disabled>Next &rarr;</button>
+      <button id="btn-skip" disabled>Skip</button>
+      <span class="nav-separator">|</span>
+      <button id="btn-confirm" class="btn-save" disabled>Save</button>
+      <button id="btn-reset" disabled>Reset</button>
+      <span class="nav-separator">|</span>
+      <button id="btn-settings" title="Stitcher settings">&#x2699;</button>
+      <button id="btn-help" title="Keyboard shortcuts">?</button>
+    </div>
+    <div id="combo-indicator" class="hidden"></div>
+  </header>
+
+  <main>
+    <!-- Tree View: Subfolder Navigation -->
+    <aside id="panel-tree">
+      <div id="tree-header">Folders</div>
+      <div id="tree-list"></div>
+    </aside>
+
+    <!-- Left Panel: Thumbnail Grid / Viewer -->
+    <section id="panel-thumbnails">
+      <!-- Grid Mode -->
+      <div id="thumb-grid-mode">
+        <div id="thumb-grid"></div>
+      </div>
+
+      <!-- Viewer Mode -->
+      <div id="viewer-mode" class="hidden">
+        <div id="viewer-topbar">
+          <button id="viewer-back" title="Back to grid (Esc)">&larr; Grid</button>
+          <span id="viewer-info"></span>
+          <div id="viewer-controls">
+            <button class="viewer-btn" id="viewer-reveal" title="Reveal in Explorer">&#x1F4C2;</button>
+            <button class="viewer-btn" id="viewer-rot-ccw" title="Rotate 90° CCW">&#x21B6;</button>
+            <button class="viewer-btn" id="viewer-rot-180" title="Rotate 180°">&#x21BB;</button>
+            <button class="viewer-btn" id="viewer-rot-cw" title="Rotate 90° CW">&#x21B7;</button>
+          </div>
+        </div>
+        <div id="viewer-stage">
+          <button id="viewer-prev" class="viewer-nav" title="Previous image">&larr;</button>
+          <img id="viewer-image" />
+          <button id="viewer-next" class="viewer-nav" title="Next image">&rarr;</button>
+          <div id="viewer-rect-overlay" class="hidden">
+            <div id="viewer-rect-box"></div>
+            <div id="viewer-rect-actions" class="hidden">
+              <button id="viewer-rect-apply" class="rect-btn rect-btn-apply">Apply</button>
+              <button id="viewer-rect-cancel" class="rect-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Draggable Divider -->
+    <div id="panel-divider"></div>
+
+    <!-- Right Panel: Tabs (Structure / Results) -->
+    <section id="panel-right">
+      <div id="right-tabs">
+        <button class="right-tab active" data-tab="structure">Structure</button>
+        <button class="right-tab" data-tab="tools">Tools</button>
+        <button class="right-tab" data-tab="results">Results</button>
+      </div>
+
+      <!-- Structure Tab -->
+      <div id="tab-structure" class="tab-content active">
+      <div id="structure-diagram">
+        <div class="structure-row cols-5">
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+          <div class="slot drop-target" data-code="ot">
+            <span class="slot-label">obv top</span>
+            <span class="slot-shortcut">ot</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+        </div>
+        <div class="structure-row cols-5">
+          <div class="slot main-slot drop-target" data-code="05">
+            <span class="slot-label">left</span>
+            <span class="slot-shortcut">5</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot drop-target" data-code="ol">
+            <span class="slot-label">obv left</span>
+            <span class="slot-shortcut">ol</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot main-slot drop-target" data-code="01">
+            <span class="slot-label">obverse</span>
+            <span class="slot-shortcut">1</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot drop-target" data-code="or">
+            <span class="slot-label">obv right</span>
+            <span class="slot-shortcut">or</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot main-slot drop-target" data-code="06">
+            <span class="slot-label">right</span>
+            <span class="slot-shortcut">6</span>
+            <img class="slot-thumb" />
+          </div>
+        </div>
+        <div class="structure-row cols-5">
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+          <div class="slot drop-target" data-code="ob">
+            <span class="slot-label">obv btm</span>
+            <span class="slot-shortcut">ob</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+        </div>
+        <div class="structure-row cols-5">
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+          <div class="slot main-slot drop-target" data-code="04">
+            <span class="slot-label">bottom</span>
+            <span class="slot-shortcut">4</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+        </div>
+        <div class="structure-row cols-5">
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+          <div class="slot drop-target" data-code="rt">
+            <span class="slot-label">rev top</span>
+            <span class="slot-shortcut">rt</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+        </div>
+        <div class="structure-row cols-5">
+          <div class="slot mirror-slot drop-target" data-code="05">
+            <span class="slot-label">left</span>
+            <span class="slot-shortcut">5</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot drop-target" data-code="rl">
+            <span class="slot-label">rev left</span>
+            <span class="slot-shortcut">rl</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot main-slot drop-target" data-code="02">
+            <span class="slot-label">reverse</span>
+            <span class="slot-shortcut">2</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot drop-target" data-code="rr">
+            <span class="slot-label">rev right</span>
+            <span class="slot-shortcut">rr</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot mirror-slot drop-target" data-code="06">
+            <span class="slot-label">right</span>
+            <span class="slot-shortcut">6</span>
+            <img class="slot-thumb" />
+          </div>
+        </div>
+        <div class="structure-row cols-5">
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+          <div class="slot drop-target" data-code="rb">
+            <span class="slot-label">rev btm</span>
+            <span class="slot-shortcut">rb</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+        </div>
+        <div class="structure-row cols-5">
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+          <div class="slot main-slot drop-target" data-code="03">
+            <span class="slot-label">top</span>
+            <span class="slot-shortcut">3</span>
+            <img class="slot-thumb" />
+          </div>
+          <div class="slot-spacer"></div>
+          <div class="slot-spacer"></div>
+        </div>
+      </div>
+
+      <!-- Rotation controls -->
+      <div id="rotation-controls">
+        <button id="btn-rot-ccw" title="Rotate 90° CCW (Shift+Left)">&#x21B6; 90°</button>
+        <button id="btn-rot-180" title="Rotate 180° (Shift+Down)">&#x21BB; 180°</button>
+        <button id="btn-rot-cw" title="Rotate 90° CW (Shift+Right)">&#x21B7; 90°</button>
+      </div>
+      </div><!-- end tab-structure -->
+
+      <!-- Tools Tab -->
+      <div id="tab-tools" class="tab-content">
+        <div class="tools-section">
+          <div class="tools-section-label">Tools</div>
+          <div class="tool-grid">
+            <button class="tool-btn" data-tool="trim" title="Trim to Object (T)">&#x2702;&#xFE0F;</button>
+          </div>
+        </div>
+
+        <div class="tools-section" id="tool-options-trim">
+          <div class="tools-section-label">Trim Options</div>
+          <div class="tool-options-row">
+            <label>Fill:</label>
+            <button class="bg-swatch active" id="bg-white" title="White fill"></button>
+            <button class="bg-swatch bg-black-swatch" id="bg-black" title="Black fill"></button>
+          </div>
+          <p class="tools-hint">Drag a rectangle around the tablet in the viewer. The detector finds the tablet edges within your rectangle, pads 20&#x202F;px, and overwrites the file. The original is backed up to <code>_Raw/</code>.</p>
+        </div>
+
+        <div class="tools-section">
+          <div class="tools-section-label">Image Info</div>
+          <div id="tool-info">
+            <div class="info-row"><span class="info-label">File:</span> <span id="info-filename">—</span></div>
+            <div class="info-row"><span class="info-label">View:</span> <span id="info-view">—</span></div>
+            <div class="info-row"><span class="info-label">Size:</span> <span id="info-dims">—</span></div>
+          </div>
+        </div>
+      </div><!-- end tab-tools -->
+
+      <!-- Results Tab -->
+      <div id="tab-results" class="tab-content">
+        <div id="results-container">
+          <div id="results-empty">
+            <p>No results yet.</p>
+            <p class="results-hint">Process tablets in the stitcher to see results here.</p>
+          </div>
+          <div id="results-info" class="hidden">
+            <div id="result-summary"></div>
+            <div id="result-actions">
+              <button id="btn-reprocess-marked" class="btn-reprocess">Reprocess Marked</button>
+              <button id="btn-reprocess-all" class="btn-reprocess-secondary">Reprocess All</button>
+            </div>
+            <div id="stitcher-status" class="hidden"></div>
+            <div id="result-notes-container">
+              <textarea id="result-notes" placeholder="Add notes..." rows="3"></textarea>
+              <button id="result-save-notes">Save Notes</button>
+            </div>
+          </div>
+        </div>
+      </div><!-- end tab-results -->
+    </section>
+  </main>
+
+  <!-- Status Bar -->
+  <footer id="statusbar">
+    <span id="status-text">Select a folder to begin.</span>
+    <span id="status-count"></span>
+  </footer>
+
+
+  <!-- Settings Overlay -->
+  <div id="settings-overlay" class="hidden">
+    <div id="settings-panel">
+      <div id="settings-header">
+        <h3>Stitcher Settings</h3>
+        <button id="settings-close">&times;</button>
+      </div>
+      <div id="settings-content">
+        <div class="settings-row">
+          <label>Stitcher folder (ebl-photo-stitcher):</label>
+          <div class="settings-input-row">
+            <input type="text" id="setting-stitcher-path" placeholder="Path to ebl-photo-stitcher folder" />
+            <button id="setting-browse-stitcher">Browse</button>
+          </div>
+          <div id="setting-stitcher-status" class="settings-hint"></div>
+        </div>
+        <div class="settings-row">
+          <label>Python interpreter (full path, or leave blank for system python):</label>
+          <input type="text" id="setting-python-path" placeholder="e.g., C:\Users\...\miniconda3\envs\ebl-photo\python.exe" />
+        </div>
+        <div class="settings-row">
+          <label>Project:</label>
+          <select id="setting-project">
+            <option value="">Loading projects...</option>
+          </select>
+          <div id="setting-project-hint" class="settings-hint"></div>
+        </div>
+
+
+        <div class="settings-footer">
+          <button id="settings-save" class="btn-save">Save Settings</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result Preview Overlay -->
+  <div id="result-preview-overlay" class="hidden">
+    <div id="result-preview-header">
+      <span id="result-preview-info"></span>
+      <div id="result-preview-controls">
+        <button class="preview-btn" id="result-toggle-revision" title="Toggle revision (R)">&#x1F534; Revision</button>
+        <button class="preview-btn" id="result-preview-reveal" title="Reveal in Explorer">&#x1F4C2;</button>
+        <button id="result-preview-close">&times;</button>
+      </div>
+    </div>
+    <button id="result-preview-prev" class="preview-nav" title="Previous result">&larr;</button>
+    <img id="result-preview-image" />
+    <button id="result-preview-next" class="preview-nav" title="Next result">&rarr;</button>
+  </div>
+
+  <!-- Help Overlay -->
+  <div id="help-overlay" class="hidden">
+    <div id="help-panel">
+      <div id="help-header">
+        <h3>Keyboard Shortcuts</h3>
+        <button id="help-close">&times;</button>
+      </div>
+      <div id="help-content">
+        <div class="help-section">
+          <h4>Assignment</h4>
+          <div class="help-row"><kbd>1</kbd>-<kbd>6</kbd> <span>Assign main views (obverse, reverse, top, bottom, left, right)</span></div>
+          <div class="help-row"><kbd>O</kbd> then <kbd>T/B/L/R</kbd> <span>Assign obverse intermediates</span></div>
+          <div class="help-row"><kbd>R</kbd> then <kbd>T/B/L/R</kbd> <span>Assign reverse intermediates</span></div>
+          <div class="help-row"><kbd>U</kbd> <span>Unassign selected image</span></div>
+        </div>
+        <div class="help-section">
+          <h4>Selection</h4>
+          <div class="help-row"><kbd>Click</kbd> <span>Select single image</span></div>
+          <div class="help-row"><kbd>Ctrl</kbd>+<kbd>Click</kbd> <span>Toggle image in selection</span></div>
+          <div class="help-row"><kbd>Shift</kbd>+<kbd>Click</kbd> <span>Select range</span></div>
+          <div class="help-row"><kbd>Ctrl</kbd>+<kbd>A</kbd> <span>Select all images</span></div>
+          <div class="help-row"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> <span>Navigate between images</span></div>
+        </div>
+        <div class="help-section">
+          <h4>Rotation</h4>
+          <div class="help-row"><kbd>Shift</kbd>+<kbd>&larr;</kbd> <span>Rotate 90° counter-clockwise</span></div>
+          <div class="help-row"><kbd>Shift</kbd>+<kbd>&rarr;</kbd> <span>Rotate 90° clockwise</span></div>
+          <div class="help-row"><kbd>Shift</kbd>+<kbd>&darr;</kbd> <span>Rotate 180°</span></div>
+        </div>
+        <div class="help-section">
+          <h4>Other</h4>
+          <div class="help-row"><kbd>Space</kbd> <span>Preview full-size image</span></div>
+          <div class="help-row"><kbd>Enter</kbd> <span>Save (rename files)</span></div>
+          <div class="help-row"><kbd>Drag</kbd> <span>Drag thumbnail onto structure slot</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

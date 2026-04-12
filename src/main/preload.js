@@ -1,0 +1,30 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('api', {
+  // Stitcher bridge
+  getStitcherConfig: () => ipcRenderer.invoke('get-stitcher-config'),
+  saveStitcherConfig: (config) => ipcRenderer.invoke('save-stitcher-config', config),
+  verifyStitcherPath: (path) => ipcRenderer.invoke('verify-stitcher-path', path),
+  getStitcherProjects: (stitcherPath) => ipcRenderer.invoke('get-stitcher-projects', stitcherPath),
+  selectStitcherFolder: () => ipcRenderer.invoke('select-stitcher-folder'),
+  processTablets: (rootFolder, tablets) => ipcRenderer.invoke('process-tablets', rootFolder, tablets),
+  onStitcherProgress: (callback) => ipcRenderer.on('stitcher-progress', (event, data) => callback(data)),
+  offStitcherProgress: () => ipcRenderer.removeAllListeners('stitcher-progress'),
+
+
+  selectFolder: () => ipcRenderer.invoke('select-folder'),
+  scanFolder: (path) => ipcRenderer.invoke('scan-folder', path),
+  getThumbnail: (path) => ipcRenderer.invoke('get-thumbnail', path),
+  getFullImage: (path) => ipcRenderer.invoke('get-full-image', path),
+  getImageInfo: (path) => ipcRenderer.invoke('get-image-info', path),
+  renameFiles: (subfolder, assignments, tabletId, allImagePaths) =>
+    ipcRenderer.invoke('rename-files', subfolder, assignments, tabletId, allImagePaths),
+  scanResults: (rootFolder) => ipcRenderer.invoke('scan-results', rootFolder),
+  loadReviewStatus: (rootFolder) => ipcRenderer.invoke('load-review-status', rootFolder),
+  saveReviewStatus: (rootFolder, status) => ipcRenderer.invoke('save-review-status', rootFolder, status),
+  getResultThumbnail: (path) => ipcRenderer.invoke('get-result-thumbnail', path),
+  revealInExplorer: (path) => ipcRenderer.invoke('reveal-in-explorer', path),
+  rotateImage: (path, degrees) => ipcRenderer.invoke('rotate-image', path, degrees),
+  rotateImagesBatch: (paths, degrees) => ipcRenderer.invoke('rotate-images-batch', paths, degrees),
+  trimInRect: (path, rect, bgColor) => ipcRenderer.invoke('trim-in-rect', path, rect, bgColor),
+});

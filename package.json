@@ -5,13 +5,44 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win",
+    "dist:dir": "electron-builder --win --dir"
   },
   "dependencies": {
     "sharp": "^0.33.0"
   },
   "devDependencies": {
     "electron": "31.7.7",
+    "electron-builder": "^25.1.8",
     "electron-reload": "^2.0.0-alpha.1"
+  },
+  "build": {
+    "appId": "com.tablet-image-renamer",
+    "productName": "Tablet Image Renamer",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   verifyStitcherExe: (path) => ipcRenderer.invoke('verify-stitcher-exe', path),
   autoDetectStitcher: () => ipcRenderer.invoke('auto-detect-stitcher'),
   selectStitcherExe: () => ipcRenderer.invoke('select-stitcher-exe'),
+  cleanTabletCache: (rootFolder, tablets) => ipcRenderer.invoke('clean-tablet-cache', rootFolder, tablets),
   processTablets: (rootFolder, tablets) => ipcRenderer.invoke('process-tablets', rootFolder, tablets),
   onStitcherProgress: (callback) => ipcRenderer.on('stitcher-progress', (event, data) => callback(data)),
   offStitcherProgress: () => ipcRenderer.removeAllListeners('stitcher-progress'),

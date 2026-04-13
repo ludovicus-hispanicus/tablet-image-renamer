@@ -151,6 +151,33 @@ ipcMain.handle('process-tablets', async (event, rootFolder, tablets) => {
   });
 });
 
+// Clean cached _object.tif and _ruler.tif files from tablet subfolders
+// so the stitcher re-extracts from the (possibly edited) source images.
+ipcMain.handle('clean-tablet-cache', async (event, rootFolder, tabletNames) => {
+  const cleaned = [];
+  const folders = tabletNames || fs.readdirSync(rootFolder)
+    .filter(f => fs.statSync(path.join(rootFolder, f)).isDirectory() && !f.startsWith('_'));
+
+  for (const name of folders) {
+    const subDir = path.join(rootFolder, name);
+    if (!fs.existsSync(subDir)) continue;
+
+    const files = fs.readdirSync(subDir);
+    for (const file of files) {
+      if (file.endsWith('_object.tif') || file.endsWith('_ruler.tif')) {
+        try {
+          fs.unlinkSync(path.join(subDir, file));
+          cleaned.push(file);
+        } catch (e) {
+          console.warn(`Could not delete ${file}: ${e.message}`);
+        }
+      }
+    }
+  }
+  console.log(`Cleaned ${cleaned.length} cached files from ${folders.length} folder(s).`);
+  return cleaned.length;
+});
+
 ipcMain.handle('scan-results', async (event, rootFolder) => {
   const { scanResults, loadReviewStatus, saveReviewStatus } = require('./results-ops');
   return scanResults(rootFolder);

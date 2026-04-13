@@ -187,6 +187,7 @@ document.getElementById('result-preview-prev').addEventListener('click', () => n
 document.getElementById('result-preview-next').addEventListener('click', () => navigateResultPreview(1));
 document.getElementById('result-toggle-revision').addEventListener('click', () => setResultStatus('revision'));
 document.getElementById('result-toggle-updated').addEventListener('click', () => setResultStatus('updated'));
+document.getElementById('result-toggle-sent').addEventListener('click', () => setResultStatus('sent'));
 document.getElementById('result-preview-reveal').addEventListener('click', () => {
   if (resultsState.results[resultsState.currentIndex]) {
     window.api.revealInExplorer(resultsState.results[resultsState.currentIndex].jpgPath);
@@ -1248,12 +1249,10 @@ function updateTreeStatusIcons() {
         sent: 'Sent to stitcher — review needed',
       };
       icon.title = titles[review.status] || '';
-      if (review.status !== 'sent') {
-        icon.addEventListener('click', (e) => {
-          e.stopPropagation();
-          toggleTreeStatus(sub.name);
-        });
-      }
+      icon.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleTreeStatus(sub.name);
+      });
       item.appendChild(icon);
     }
   });
@@ -1269,8 +1268,8 @@ async function toggleTreeStatus(tabletName) {
       status: 'updated',
       reviewedAt: new Date().toISOString(),
     };
-  } else if (existing.status === 'updated') {
-    // updated → clear
+  } else {
+    // updated / sent / anything → clear
     delete existing.status;
     delete existing.reviewedAt;
     if (!existing.notes) {
@@ -1421,6 +1420,14 @@ async function runStitcher(tablets) {
 
   // Track which tablets were sent
   const sentTablets = tablets || state.subfolders.map(s => s.name);
+
+  // Clean cached _object.tif and _ruler.tif files so the stitcher
+  // re-extracts from the (possibly edited) source images
+  statusEl.textContent += 'Cleaning cached files...\n';
+  const cleanedCount = await window.api.cleanTabletCache(state.rootFolder, tablets);
+  if (cleanedCount > 0) {
+    statusEl.textContent += `Removed ${cleanedCount} cached file(s).\n`;
+  }
 
   const result = await window.api.processTablets(state.rootFolder, tablets);
 

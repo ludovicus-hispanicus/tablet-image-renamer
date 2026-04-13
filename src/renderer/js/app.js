@@ -208,9 +208,13 @@ document.addEventListener('keydown', (e) => {
 async function onBrowse() {
   const folder = await window.api.selectFolder();
   if (!folder) return;
+  await openFolder(folder);
+}
 
+async function openFolder(folder) {
   state.rootFolder = folder;
   dom.folderPath.textContent = folder;
+  localStorage.setItem('lastFolder', folder);
   setStatus('Scanning folder...');
 
   const result = await window.api.scanFolder(folder);
@@ -227,6 +231,14 @@ async function onBrowse() {
   loadResults();
   loadCurrentSubfolder();
 }
+
+// Restore last folder on startup
+(async () => {
+  const lastFolder = localStorage.getItem('lastFolder');
+  if (lastFolder) {
+    openFolder(lastFolder);
+  }
+})();
 
 // === Tree View ===
 function buildTreeView() {

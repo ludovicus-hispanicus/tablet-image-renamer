@@ -173,7 +173,11 @@ document.getElementById('btn-reprocess-all').addEventListener('click', reprocess
 document.getElementById('btn-settings').addEventListener('click', openSettings);
 document.getElementById('settings-close').addEventListener('click', closeSettings);
 document.getElementById('settings-save').addEventListener('click', saveSettings);
-document.getElementById('setting-browse-stitcher').addEventListener('click', browseStitcher);
+document.getElementById('setting-browse-script').addEventListener('click', browseScript);
+document.getElementById('setting-generate-template').addEventListener('click', (e) => {
+  e.preventDefault();
+  generateTemplate();
+});
 document.getElementById('settings-overlay').addEventListener('click', (e) => {
   if (e.target.id === 'settings-overlay') closeSettings();
 });
@@ -1282,89 +1286,54 @@ async function toggleTreeStatus(tabletName) {
   }
 }
 
-// === Stitcher Settings ===
+// === Settings ===
 async function openSettings() {
   const config = await window.api.getStitcherConfig();
-  document.getElementById('setting-stitcher-path').value = config.stitcherPath || '';
-  document.getElementById('setting-python-path').value = config.pythonPath || '';
-  const pathEl = document.getElementById('setting-stitcher-path');
-  if (pathEl.value) {
-    await verifyStitcherUI(pathEl.value);
+  document.getElementById('setting-script-path').value = config.scriptPath || '';
+  if (config.scriptPath) {
+    await verifyScriptUI(config.scriptPath);
   } else {
-    // No stitcher path yet — still populate dropdown (shows "No projects found")
-    await populateProjectDropdown('', config.project);
+    document.getElementById('setting-script-status').textContent = '';
   }
-
   document.getElementById('settings-overlay').classList.remove('hidden');
-}
-
-async function populateProjectDropdown(stitcherPath, selectedProject) {
-  const select = document.getElementById('setting-project');
-  const hint = document.getElementById('setting-project-hint');
-  select.innerHTML = '';
-
-  const projects = await window.api.getStitcherProjects(stitcherPath || '');
-
-  if (!projects || projects.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'No projects found';
-    select.appendChild(opt);
-    if (hint) hint.textContent = stitcherPath
-      ? 'No projects in stitcher assets/projects/ or AppData'
-      : 'Set the stitcher folder path first';
-    return;
-  }
-
-  if (hint) hint.textContent = '';
-  for (const p of projects) {
-    const opt = document.createElement('option');
-    opt.value = p.name;
-    opt.textContent = p.builtin ? p.name : `${p.name} (custom)`;
-    select.appendChild(opt);
-  }
-
-  // Select the saved project, or fall back to first
-  if (selectedProject) {
-    select.value = selectedProject;
-    // If saved project no longer exists, keep first option
-    if (!select.value) select.selectedIndex = 0;
-  }
 }
 
 function closeSettings() {
   document.getElementById('settings-overlay').classList.add('hidden');
 }
 
-async function browseStitcher() {
-  const path = await window.api.selectStitcherFolder();
-  if (path) {
-    document.getElementById('setting-stitcher-path').value = path;
-    verifyStitcherUI(path);
+async function browseScript() {
+  const scriptPath = await window.api.selectScriptFile();
+  if (scriptPath) {
+    document.getElementById('setting-script-path').value = scriptPath;
+    await verifyScriptUI(scriptPath);
   }
 }
 
-
-async function verifyStitcherUI(path) {
-  const statusEl = document.getElementById('setting-stitcher-status');
-  const result = await window.api.verifyStitcherPath(path);
+async function verifyScriptUI(scriptPath) {
+  const statusEl = document.getElementById('setting-script-status');
+  const result = await window.api.verifyScript(scriptPath);
   if (result.valid) {
-    statusEl.textContent = '\u2713 Stitcher found (process_tablets.py exists)';
+    statusEl.textContent = '\u2713 Script found';
     statusEl.className = 'settings-hint valid';
   } else {
     statusEl.textContent = '\u2717 ' + result.reason;
     statusEl.className = 'settings-hint invalid';
   }
-  // Refresh the project list now that we have a (possibly new) stitcher path
-  const currentProject = document.getElementById('setting-project').value;
-  await populateProjectDropdown(path, currentProject);
+}
+
+async function generateTemplate() {
+  const filePath = await window.api.generateTemplateScript();
+  if (filePath) {
+    document.getElementById('setting-script-path').value = filePath;
+    await verifyScriptUI(filePath);
+    setStatus(`Template script created: ${filePath} — edit it to set your stitcher path.`);
+  }
 }
 
 async function saveSettings() {
   const config = {
-    stitcherPath: document.getElementById('setting-stitcher-path').value.trim(),
-    pythonPath: document.getElementById('setting-python-path').value.trim(),
-    project: document.getElementById('setting-project').value,
+    scriptPath: document.getElementById('setting-script-path').value.trim(),
   };
   await window.api.saveStitcherConfig(config);
   setStatus('Settings saved.');
@@ -1414,15 +1383,15 @@ async function reprocessAll() {
 
 async function runStitcher(tablets) {
   const config = await window.api.getStitcherConfig();
-  if (!config.stitcherPath) {
-    alert('Stitcher path not configured. Open Settings (gear icon) to set it up.');
+  if (!config.scriptPath) {
+    alert('Processing script not configured. Open Settings (gear icon) to set it up.');
     openSettings();
     return;
   }
 
-  const verification = await window.api.verifyStitcherPath(config.stitcherPath);
+  const verification = await window.api.verifyScript(config.scriptPath);
   if (!verification.valid) {
-    alert(`Stitcher not found: ${verification.reason}\n\nOpen Settings to fix.`);
+    alert(`Script error: ${verification.reason}\n\nOpen Settings to fix.`);
     openSettings();
     return;
   }

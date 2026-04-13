@@ -5,9 +5,9 @@ const { scanFolder, generateThumbnail, renameFiles, getImageInfo } = require('./
 const {
   loadStitcherConfig,
   saveStitcherConfig,
-  verifyStitcherPath,
-  loadStitcherProjects,
-  processStitcherTablets,
+  verifyScript,
+  generateTemplateScript,
+  runProcessingScript,
 } = require('./stitcher-bridge');
 
 // Hot reload in dev mode — watches renderer files (HTML, CSS, JS)
@@ -123,27 +123,35 @@ ipcMain.handle('save-stitcher-config', async (event, config) => {
   return saveStitcherConfig(config);
 });
 
-ipcMain.handle('verify-stitcher-path', async (event, stitcherPath) => {
-  return verifyStitcherPath(stitcherPath);
+ipcMain.handle('verify-script', async (event, scriptPath) => {
+  return verifyScript(scriptPath);
 });
 
-ipcMain.handle('get-stitcher-projects', async (event, stitcherPath) => {
-  return loadStitcherProjects(stitcherPath);
-});
-
-ipcMain.handle('select-stitcher-folder', async () => {
+ipcMain.handle('select-script-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
-    title: 'Select ebl-photo-stitcher folder (must contain process_tablets.py)',
+    properties: ['openFile'],
+    title: 'Select processing script',
+    filters: [
+      { name: 'Scripts', extensions: ['bat', 'cmd', 'sh', 'py', 'exe'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
   });
   if (result.canceled) return null;
   return result.filePaths[0];
 });
 
+ipcMain.handle('generate-template-script', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Choose where to save the template script',
+  });
+  if (result.canceled) return null;
+  return generateTemplateScript(result.filePaths[0]);
+});
 
 ipcMain.handle('process-tablets', async (event, rootFolder, tablets) => {
   const config = loadStitcherConfig();
-  return processStitcherTablets(config, rootFolder, tablets, (progress) => {
+  return runProcessingScript(config.scriptPath, rootFolder, tablets, (progress) => {
     mainWindow.webContents.send('stitcher-progress', progress);
   });
 });

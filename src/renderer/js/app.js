@@ -185,7 +185,8 @@ window.api.onStitcherProgress((event) => {
 document.getElementById('result-preview-close').addEventListener('click', closeResultPreview);
 document.getElementById('result-preview-prev').addEventListener('click', () => navigateResultPreview(-1));
 document.getElementById('result-preview-next').addEventListener('click', () => navigateResultPreview(1));
-document.getElementById('result-toggle-revision').addEventListener('click', toggleRevisionInPreview);
+document.getElementById('result-toggle-revision').addEventListener('click', () => setResultStatus('revision'));
+document.getElementById('result-toggle-updated').addEventListener('click', () => setResultStatus('updated'));
 document.getElementById('result-preview-reveal').addEventListener('click', () => {
   if (resultsState.results[resultsState.currentIndex]) {
     window.api.revealInExplorer(resultsState.results[resultsState.currentIndex].jpgPath);
@@ -574,7 +575,8 @@ function onKeyDown(e) {
   if (!document.getElementById('result-preview-overlay').classList.contains('hidden')) {
     if (e.key === 'ArrowLeft') { navigateResultPreview(-1); e.preventDefault(); }
     else if (e.key === 'ArrowRight') { navigateResultPreview(1); e.preventDefault(); }
-    else if (e.key.toLowerCase() === 'r') { toggleRevisionInPreview(); e.preventDefault(); }
+    else if (e.key.toLowerCase() === 'r') { setResultStatus('revision'); e.preventDefault(); }
+    else if (e.key.toLowerCase() === 'u') { setResultStatus('updated'); e.preventDefault(); }
     return;
   }
 
@@ -993,9 +995,7 @@ function updateResultsTab() {
   emptyEl.classList.add('hidden');
   infoEl.classList.remove('hidden');
 
-  const revCount = Object.values(resultsState.reviewStatus).filter(r => r.status === 'revision').length;
-  document.getElementById('result-summary').textContent =
-    `${resultsState.results.length} results  |  ${revCount} marked for revision`;
+  updateResultSummary();
 
   // If results tab is active, show result thumbnails in left panel
   if (activeTab === 'results') {
@@ -1016,15 +1016,15 @@ function showResultThumbnails() {
   for (let i = 0; i < resultsState.results.length; i++) {
     const result = resultsState.results[i];
     const review = resultsState.reviewStatus[result.name];
-    const isRevision = review?.status === 'revision';
+    const statusClass = review?.status === 'revision' ? ' revision' : review?.status === 'updated' ? ' updated' : '';
 
     const card = document.createElement('div');
-    card.className = `result-card${isRevision ? ' revision' : ''}`;
+    card.className = `result-card${statusClass}`;
     card.dataset.index = i;
 
     const badge = document.createElement('div');
     badge.className = 'result-badge';
-    badge.textContent = '\uD83D\uDD34';
+    badge.textContent = review?.status === 'updated' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
     card.appendChild(badge);
 
     const imgEl = document.createElement('img');
@@ -1095,15 +1095,8 @@ async function loadResultPreviewImage(index) {
   if (!result) return;
   resultsState.currentIndex = index;
 
-  const total = resultsState.results.length;
   const review = resultsState.reviewStatus[result.name];
-  const revLabel = review?.status === 'revision' ? '  [REVISION]' : '';
-  document.getElementById('result-preview-info').textContent =
-    `${result.name}${revLabel}  |  ${index + 1}/${total}  |  \u2190\u2192 navigate  |  R toggle revision  |  Esc close`;
-
-  // Update revision button state
-  const revBtn = document.getElementById('result-toggle-revision');
-  revBtn.classList.toggle('active', review?.status === 'revision');
+  updateResultPreviewUI(review);
 
   const imgEl = document.getElementById('result-preview-image');
   imgEl.src = '';
@@ -1124,44 +1117,70 @@ function closeResultPreview() {
   document.getElementById('result-preview-image').src = '';
 }
 
-async function toggleRevisionInPreview() {
+// Set or toggle a result's review status. Clicking the same status clears it.
+async function setResultStatus(newStatus) {
   const result = resultsState.results[resultsState.currentIndex];
   if (!result) return;
 
   const existing = resultsState.reviewStatus[result.name] || {};
 
-  if (existing.status === 'revision') {
-    delete resultsState.reviewStatus[result.name];
+  if (existing.status === newStatus) {
+    // Toggle off — clear status but keep notes
+    delete existing.status;
+    delete existing.reviewedAt;
+    if (!existing.notes) {
+      delete resultsState.reviewStatus[result.name];
+    }
   } else {
     resultsState.reviewStatus[result.name] = {
       ...existing,
-      status: 'revision',
+      status: newStatus,
       reviewedAt: new Date().toISOString(),
     };
   }
 
   await window.api.saveReviewStatus(state.rootFolder, resultsState.reviewStatus);
 
-  // Update preview button
   const review = resultsState.reviewStatus[result.name];
-  document.getElementById('result-toggle-revision').classList.toggle('active', review?.status === 'revision');
+  updateResultPreviewUI(review);
 
-  // Update info text
-  const revLabel = review?.status === 'revision' ? '  [REVISION]' : '';
-  const total = resultsState.results.length;
-  document.getElementById('result-preview-info').textContent =
-    `${result.name}${revLabel}  |  ${resultsState.currentIndex + 1}/${total}  |  \u2190\u2192 navigate  |  R toggle revision  |  Esc close`;
-
-  // Update thumbnail card
+  // Update thumbnail card classes and badge
   const card = document.querySelector(`.result-card[data-index="${resultsState.currentIndex}"]`);
-  if (card) card.classList.toggle('revision', review?.status === 'revision');
+  if (card) {
+    card.classList.remove('revision', 'updated');
+    if (review?.status) card.classList.add(review.status);
+    const badge = card.querySelector('.result-badge');
+    if (badge) badge.textContent = review?.status === 'updated' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
+  }
 
   updateTreeStatusIcons();
+  updateResultSummary();
+}
 
-  // Update summary count without reloading thumbnails
-  const revCount = Object.values(resultsState.reviewStatus).filter(r => r.status === 'revision').length;
-  document.getElementById('result-summary').textContent =
-    `${resultsState.results.length} results  |  ${revCount} marked for revision`;
+function updateResultPreviewUI(review) {
+  const result = resultsState.results[resultsState.currentIndex];
+  if (!result) return;
+
+  // Update buttons
+  document.getElementById('result-toggle-revision').classList.toggle('active', review?.status === 'revision');
+  document.getElementById('result-toggle-updated').classList.toggle('active', review?.status === 'updated');
+
+  // Update info text
+  const statusLabel = review?.status === 'revision' ? '  [REVISION]'
+    : review?.status === 'updated' ? '  [UPDATED]' : '';
+  const total = resultsState.results.length;
+  document.getElementById('result-preview-info').textContent =
+    `${result.name}${statusLabel}  |  ${resultsState.currentIndex + 1}/${total}  |  \u2190\u2192 navigate  |  R revision  |  U updated  |  Esc close`;
+}
+
+function updateResultSummary() {
+  const statuses = Object.values(resultsState.reviewStatus);
+  const revCount = statuses.filter(r => r.status === 'revision').length;
+  const updCount = statuses.filter(r => r.status === 'updated').length;
+  const parts = [`${resultsState.results.length} results`];
+  if (revCount) parts.push(`${revCount} revision`);
+  if (updCount) parts.push(`${updCount} updated`);
+  document.getElementById('result-summary').textContent = parts.join('  |  ');
 }
 
 async function saveCurrentNotes() {
@@ -1202,6 +1221,11 @@ function updateTreeStatusIcons() {
       const icon = document.createElement('span');
       icon.className = 'tree-status';
       icon.textContent = '\uD83D\uDD34';
+      item.appendChild(icon);
+    } else if (review?.status === 'updated') {
+      const icon = document.createElement('span');
+      icon.className = 'tree-status';
+      icon.textContent = '\uD83D\uDFE2';
       item.appendChild(icon);
     }
   });

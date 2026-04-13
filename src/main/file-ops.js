@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
+const exifr = require('exifr');
 
 const IMAGE_EXTENSIONS = new Set([
   '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.heic', '.heif', '.cr3',
@@ -128,11 +129,64 @@ function detectViewCode(filename) {
 }
 
 /**
+ * Extract the embedded JPEG preview from a raw file (CR3, HEIC, etc.).
+ * Canon CR3 files always contain a JPEG thumbnail/preview.
+ * Returns a Buffer of the JPEG, or null if extraction fails.
+ */
+async function extractRawPreview(imagePath) {
+  try {
+    // exifr.thumbnail() returns a Buffer of the embedded JPEG thumbnail
+    const thumbBuf = await exifr.thumbnail(imagePath);
+    if (thumbBuf && thumbBuf.length > 100) return thumbBuf;
+    return null;
+  } catch (err) {
+    console.error(`Raw preview extraction error for ${path.basename(imagePath)}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Get a Sharp-readable input for a given image path.
+ * For raw files (CR3, HEIC that Sharp can't read), extracts the embedded
+ * JPEG preview first. Returns { input, isPreview } where input is either
+ * the file path (for supported formats) or a Buffer (for raw previews).
+ */
+async function getSharpInput(imagePath) {
+  const ext = path.extname(imagePath).toLowerCase();
+  const isRaw = RAW_EXTENSIONS.has(ext);
+
+  if (!isRaw) {
+    return { input: imagePath, isPreview: false };
+  }
+
+  // Try Sharp first — it handles HEIC on some builds
+  try {
+    await sharp(imagePath, { limitInputPixels: false }).metadata();
+    return { input: imagePath, isPreview: false };
+  } catch (_) {
+    // Sharp can't handle this format — extract embedded preview
+  }
+
+  const preview = await extractRawPreview(imagePath);
+  if (preview) {
+    return { input: preview, isPreview: true };
+  }
+
+  return { input: null, isPreview: false };
+}
+
+/**
  * Generate a thumbnail as base64 data URL.
  */
 async function generateThumbnail(imagePath) {
   try {
-    const buffer = await sharp(imagePath, { limitInputPixels: false })
+    const { input } = await getSharpInput(imagePath);
+    if (!input) {
+      console.error(`Cannot read ${path.basename(imagePath)}: unsupported raw format`);
+      return null;
+    }
+
+    const buffer = await sharp(input, { limitInputPixels: false })
       .rotate() // auto-apply EXIF orientation
       .resize(250, 250, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 80 })
@@ -150,7 +204,12 @@ async function generateThumbnail(imagePath) {
  */
 async function getImageInfo(imagePath) {
   try {
-    const metadata = await sharp(imagePath).metadata();
+    const { input } = await getSharpInput(imagePath);
+    if (!input) {
+      const stats = fs.statSync(imagePath);
+      return { width: 0, height: 0, format: path.extname(imagePath).slice(1), size: stats.size };
+    }
+    const metadata = await sharp(input).metadata();
     const stats = fs.statSync(imagePath);
     return {
       width: metadata.width,
@@ -327,4 +386,4 @@ async function renameFiles(subfolderPath, assignments, tabletId, allImagePaths) 
   return results;
 }
 
-module.exports = { scanFolder, generateThumbnail, renameFiles, getImageInfo };
+module.exports = { scanFolder, generateThumbnail, renameFiles, getImageInfo, getSharpInput };

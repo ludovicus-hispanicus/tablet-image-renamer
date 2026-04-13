@@ -184,10 +184,14 @@ ipcMain.handle('reveal-in-explorer', async (event, filePath) => {
 });
 
 ipcMain.handle('get-full-image', async (event, imagePath) => {
-  // Return base64 of a screen-sized version
+  // Return base64 of a screen-sized version, with raw file support
   const sharp = require('sharp');
+  const { getSharpInput } = require('./file-ops');
   try {
-    const buffer = await sharp(imagePath, { limitInputPixels: false })
+    const { input } = await getSharpInput(imagePath);
+    if (!input) return null;
+
+    const buffer = await sharp(input, { limitInputPixels: false })
       .rotate() // auto-apply EXIF orientation
       .resize(1920, 1440, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 85 })

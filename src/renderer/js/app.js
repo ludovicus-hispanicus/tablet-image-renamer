@@ -1217,18 +1217,57 @@ function updateTreeStatusIcons() {
     if (oldIcon) oldIcon.remove();
 
     const review = resultsState.reviewStatus[sub.name];
-    if (review?.status === 'revision') {
+    if (review?.status === 'revision' || review?.status === 'updated') {
       const icon = document.createElement('span');
       icon.className = 'tree-status';
-      icon.textContent = '\uD83D\uDD34';
-      item.appendChild(icon);
-    } else if (review?.status === 'updated') {
-      const icon = document.createElement('span');
-      icon.className = 'tree-status';
-      icon.textContent = '\uD83D\uDFE2';
+      icon.textContent = review.status === 'updated' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
+      icon.title = review.status === 'revision'
+        ? 'Needs revision — click to mark as updated'
+        : 'Updated — click to clear';
+      icon.addEventListener('click', (e) => {
+        e.stopPropagation(); // don't navigate to the subfolder
+        toggleTreeStatus(sub.name);
+      });
       item.appendChild(icon);
     }
   });
+}
+
+async function toggleTreeStatus(tabletName) {
+  const existing = resultsState.reviewStatus[tabletName] || {};
+
+  if (existing.status === 'revision') {
+    // revision → updated
+    resultsState.reviewStatus[tabletName] = {
+      ...existing,
+      status: 'updated',
+      reviewedAt: new Date().toISOString(),
+    };
+  } else if (existing.status === 'updated') {
+    // updated → clear
+    delete existing.status;
+    delete existing.reviewedAt;
+    if (!existing.notes) {
+      delete resultsState.reviewStatus[tabletName];
+    }
+  }
+
+  await window.api.saveReviewStatus(state.rootFolder, resultsState.reviewStatus);
+  updateTreeStatusIcons();
+  updateResultSummary();
+
+  // Update the result card if visible
+  const resultIdx = resultsState.results.findIndex(r => r.name === tabletName);
+  if (resultIdx >= 0) {
+    const card = document.querySelector(`.result-card[data-index="${resultIdx}"]`);
+    if (card) {
+      const review = resultsState.reviewStatus[tabletName];
+      card.classList.remove('revision', 'updated');
+      if (review?.status) card.classList.add(review.status);
+      const badge = card.querySelector('.result-badge');
+      if (badge) badge.textContent = review?.status === 'updated' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
+    }
+  }
 }
 
 // === Stitcher Settings ===

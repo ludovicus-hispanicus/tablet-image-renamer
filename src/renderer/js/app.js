@@ -166,7 +166,7 @@ document.querySelectorAll('.right-tab').forEach(tab => {
 
 // Results tab controls
 document.getElementById('result-save-notes').addEventListener('click', saveCurrentNotes);
-document.getElementById('btn-reprocess-marked').addEventListener('click', reprocessMarked);
+document.getElementById('btn-reprocess-updated').addEventListener('click', reprocessUpdated);
 document.getElementById('btn-reprocess-all').addEventListener('click', reprocessAll);
 
 // Settings dialog
@@ -1374,25 +1374,25 @@ async function saveSettings() {
 // === Stitcher Reprocessing ===
 let isStitcherRunning = false;
 
-async function reprocessMarked() {
+async function reprocessUpdated() {
   if (isStitcherRunning) {
     alert('Stitcher is already running.');
     return;
   }
 
-  const marked = Object.entries(resultsState.reviewStatus)
-    .filter(([, v]) => v.status === 'revision')
+  const updated = Object.entries(resultsState.reviewStatus)
+    .filter(([, v]) => v.status === 'updated')
     .map(([name]) => name);
 
-  if (marked.length === 0) {
-    alert('No tablets are marked for revision.');
+  if (updated.length === 0) {
+    alert('No tablets are marked as updated (green).');
     return;
   }
 
-  const ok = confirm(`Reprocess ${marked.length} tablet(s)?\n\n${marked.join('\n')}`);
+  const ok = confirm(`Reprocess ${updated.length} updated tablet(s)?\n\n${updated.join('\n')}`);
   if (!ok) return;
 
-  await runStitcher(marked);
+  await runStitcher(updated);
 }
 
 async function reprocessAll() {
@@ -1428,7 +1428,7 @@ async function runStitcher(tablets) {
   }
 
   isStitcherRunning = true;
-  document.getElementById('btn-reprocess-marked').disabled = true;
+  document.getElementById('btn-reprocess-updated').disabled = true;
   document.getElementById('btn-reprocess-all').disabled = true;
 
   const statusEl = document.getElementById('stitcher-status');
@@ -1440,7 +1440,7 @@ async function runStitcher(tablets) {
   const result = await window.api.processTablets(state.rootFolder, tablets);
 
   isStitcherRunning = false;
-  document.getElementById('btn-reprocess-marked').disabled = false;
+  document.getElementById('btn-reprocess-updated').disabled = false;
   document.getElementById('btn-reprocess-all').disabled = false;
 
   if (result.success) {

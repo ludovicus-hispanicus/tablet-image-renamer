@@ -4,9 +4,9 @@ contextBridge.exposeInMainWorld('api', {
   // Stitcher bridge
   getStitcherConfig: () => ipcRenderer.invoke('get-stitcher-config'),
   saveStitcherConfig: (config) => ipcRenderer.invoke('save-stitcher-config', config),
-  verifyScript: (path) => ipcRenderer.invoke('verify-script', path),
-  selectScriptFile: () => ipcRenderer.invoke('select-script-file'),
-  generateTemplateScript: () => ipcRenderer.invoke('generate-template-script'),
+  verifyStitcherExe: (path) => ipcRenderer.invoke('verify-stitcher-exe', path),
+  autoDetectStitcher: () => ipcRenderer.invoke('auto-detect-stitcher'),
+  selectStitcherExe: () => ipcRenderer.invoke('select-stitcher-exe'),
   processTablets: (rootFolder, tablets) => ipcRenderer.invoke('process-tablets', rootFolder, tablets),
   onStitcherProgress: (callback) => ipcRenderer.on('stitcher-progress', (event, data) => callback(data)),
   offStitcherProgress: () => ipcRenderer.removeAllListeners('stitcher-progress'),

@@ -15,18 +15,18 @@ function getConfigPath() {
 function loadStitcherConfig() {
   const configPath = getConfigPath();
   if (!fs.existsSync(configPath)) {
-    return { scriptPath: '' };
+    return { stitcherExe: '' };
   }
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    // Migrate from old format: if scriptPath is missing, try to build one
-    if (!config.scriptPath && config.stitcherPath) {
-      config.scriptPath = '';
+    // Migrate from old formats
+    if (!config.stitcherExe) {
+      config.stitcherExe = config.scriptPath || '';
     }
     return config;
   } catch (err) {
     console.error('Error loading stitcher config:', err.message);
-    return { scriptPath: '' };
+    return { stitcherExe: '' };
   }
 }
 
@@ -42,116 +42,70 @@ function saveStitcherConfig(config) {
 }
 
 /**
- * Verify a processing script exists and is executable.
+ * Verify the stitcher exe exists.
  */
-function verifyScript(scriptPath) {
-  if (!scriptPath) return { valid: false, reason: 'Script path not set' };
-  if (!fs.existsSync(scriptPath)) return { valid: false, reason: 'Script file not found' };
-
-  const ext = path.extname(scriptPath).toLowerCase();
-  const validExts = ['.bat', '.cmd', '.sh', '.py', '.exe'];
-  if (!validExts.includes(ext)) {
-    return { valid: false, reason: `Unsupported file type: ${ext}. Use .bat, .sh, .py, or .exe` };
-  }
-
+function verifyStitcherExe(exePath) {
+  if (!exePath) return { valid: false, reason: 'Stitcher path not set' };
+  if (!fs.existsSync(exePath)) return { valid: false, reason: 'File not found' };
   return { valid: true };
 }
 
 /**
- * Generate a template processing script for the user.
- * Returns the path to the generated file.
+ * Try to auto-detect the stitcher exe in common locations.
+ * Returns the path if found, null otherwise.
  */
-function generateTemplateScript(targetDir) {
-  const isWin = process.platform === 'win32';
-  const ext = isWin ? '.bat' : '.sh';
-  const filename = `process_tablets${ext}`;
-  const filePath = path.join(targetDir, filename);
+function autoDetectStitcherExe() {
+  const candidates = [];
 
-  let content;
-  if (isWin) {
-    content = `@echo off
-REM === Tablet Image Renamer — Processing Script ===
-REM This script is called by the Tablet Image Renamer app.
-REM
-REM Arguments:
-REM   %1        = root folder path (e.g., C:\\photos\\session1)
-REM   %2 %3 ... = tablet names to process (e.g., Si.10 Si.11)
-REM              If no tablet names are given, process all.
-REM
-REM Edit the paths below to match your setup:
+  // Same folder as the renamer app
+  const appDir = path.dirname(process.execPath);
+  candidates.push(path.join(appDir, 'eBL Photo Stitcher.exe'));
+  candidates.push(path.join(appDir, 'eBL Photo Stitcher'));
 
-set STITCHER_DIR=C:\\path\\to\\ebl-photo-stitcher
-set PYTHON=python
-
-cd /d "%STITCHER_DIR%"
-%PYTHON% process_tablets.py --root "%~1" --json-progress %2 %3 %4 %5 %6 %7 %8 %9
-`;
-  } else {
-    content = `#!/bin/bash
-# === Tablet Image Renamer — Processing Script ===
-# This script is called by the Tablet Image Renamer app.
-#
-# Arguments:
-#   $1        = root folder path (e.g., /Users/me/photos/session1)
-#   $2 $3 ... = tablet names to process (e.g., Si.10 Si.11)
-#              If no tablet names are given, process all.
-#
-# Edit the paths below to match your setup:
-
-STITCHER_DIR="/path/to/ebl-photo-stitcher"
-PYTHON="python"
-
-cd "$STITCHER_DIR"
-$PYTHON process_tablets.py --root "$1" --json-progress "\${@:2}"
-`;
+  // Common install locations (Windows)
+  if (process.platform === 'win32') {
+    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+    candidates.push(path.join(programFiles, 'eBL Photo Stitcher', 'eBL Photo Stitcher.exe'));
+    // Desktop
+    const desktop = path.join(os.homedir(), 'Desktop');
+    candidates.push(path.join(desktop, 'eBL Photo Stitcher.exe'));
   }
 
-  fs.writeFileSync(filePath, content, { mode: 0o755 });
-  return filePath;
+  // macOS
+  if (process.platform === 'darwin') {
+    candidates.push('/Applications/eBL Photo Stitcher.app/Contents/MacOS/eBL Photo Stitcher');
+  }
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
 }
 
 /**
- * Run the processing script with the given arguments.
- * onProgress is called with log events: { type, message }
- * Returns a promise that resolves to { success, exitCode, error? }
+ * Run the stitcher exe in headless mode.
+ * The exe is called with: --headless --root <folder> --json-progress [--tablets <name1> <name2> ...]
+ * onProgress receives log events: { type, message }
+ * Returns a promise: { success, exitCode, error? }
  */
-function runProcessingScript(scriptPath, rootFolder, tablets, onProgress) {
+function runStitcherHeadless(exePath, rootFolder, tablets, onProgress) {
   return new Promise((resolve) => {
-    const verification = verifyScript(scriptPath);
+    const verification = verifyStitcherExe(exePath);
     if (!verification.valid) {
       resolve({ success: false, error: verification.reason });
       return;
     }
 
-    const ext = path.extname(scriptPath).toLowerCase();
-    let cmd, args;
+    const args = ['--headless', '--root', rootFolder, '--json-progress'];
 
-    if (ext === '.bat' || ext === '.cmd') {
-      cmd = 'cmd.exe';
-      args = ['/c', scriptPath, rootFolder];
-    } else if (ext === '.sh') {
-      cmd = 'bash';
-      args = [scriptPath, rootFolder];
-    } else if (ext === '.py') {
-      cmd = 'python';
-      args = [scriptPath, rootFolder];
-    } else if (ext === '.exe') {
-      cmd = scriptPath;
-      args = [rootFolder];
-    } else {
-      resolve({ success: false, error: `Unsupported script type: ${ext}` });
-      return;
-    }
-
-    // Append tablet names as additional arguments
     if (tablets && tablets.length > 0) {
-      args.push(...tablets);
+      args.push('--tablets', ...tablets);
     }
 
-    console.log(`Running: ${cmd} ${args.join(' ')}`);
+    console.log(`Running stitcher: "${exePath}" ${args.join(' ')}`);
 
-    const proc = spawn(cmd, args, {
-      cwd: path.dirname(scriptPath),
+    const proc = spawn(exePath, args, {
+      cwd: path.dirname(exePath),
       env: { ...process.env },
     });
 
@@ -168,7 +122,6 @@ function runProcessingScript(scriptPath, rootFolder, tablets, onProgress) {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
-        // Try to parse as JSON progress event
         if (trimmed.startsWith('{')) {
           try {
             const event = JSON.parse(trimmed);
@@ -186,12 +139,12 @@ function runProcessingScript(scriptPath, rootFolder, tablets, onProgress) {
     });
 
     proc.on('error', (err) => {
-      console.error('Script process error:', err.message);
+      console.error('Stitcher process error:', err.message);
       resolve({ success: false, error: err.message });
     });
 
     proc.on('exit', (code) => {
-      console.log(`Script exited with code ${code}`);
+      console.log(`Stitcher exited with code ${code}`);
       if (onProgress) onProgress({ type: 'exit', code });
       resolve({ success: code === 0, exitCode: code });
     });
@@ -201,7 +154,7 @@ function runProcessingScript(scriptPath, rootFolder, tablets, onProgress) {
 module.exports = {
   loadStitcherConfig,
   saveStitcherConfig,
-  verifyScript,
-  generateTemplateScript,
-  runProcessingScript,
+  verifyStitcherExe,
+  autoDetectStitcherExe,
+  runStitcherHeadless,
 };

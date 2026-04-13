@@ -173,11 +173,7 @@ document.getElementById('btn-reprocess-all').addEventListener('click', reprocess
 document.getElementById('btn-settings').addEventListener('click', openSettings);
 document.getElementById('settings-close').addEventListener('click', closeSettings);
 document.getElementById('settings-save').addEventListener('click', saveSettings);
-document.getElementById('setting-browse-script').addEventListener('click', browseScript);
-document.getElementById('setting-generate-template').addEventListener('click', (e) => {
-  e.preventDefault();
-  generateTemplate();
-});
+document.getElementById('setting-browse-stitcher').addEventListener('click', browseStitcherExe);
 document.getElementById('settings-overlay').addEventListener('click', (e) => {
   if (e.target.id === 'settings-overlay') closeSettings();
 });
@@ -1289,11 +1285,23 @@ async function toggleTreeStatus(tabletName) {
 // === Settings ===
 async function openSettings() {
   const config = await window.api.getStitcherConfig();
-  document.getElementById('setting-script-path').value = config.scriptPath || '';
-  if (config.scriptPath) {
-    await verifyScriptUI(config.scriptPath);
+  let exePath = config.stitcherExe || '';
+
+  // Auto-detect if not configured
+  if (!exePath) {
+    const detected = await window.api.autoDetectStitcher();
+    if (detected) {
+      exePath = detected;
+      setStatus('Auto-detected stitcher: ' + detected);
+    }
+  }
+
+  document.getElementById('setting-stitcher-exe').value = exePath;
+  if (exePath) {
+    await verifyStitcherUI(exePath);
   } else {
-    document.getElementById('setting-script-status').textContent = '';
+    document.getElementById('setting-stitcher-status').textContent = 'Not configured — click Browse to locate eBL Photo Stitcher';
+    document.getElementById('setting-stitcher-status').className = 'settings-hint';
   }
   document.getElementById('settings-overlay').classList.remove('hidden');
 }
@@ -1302,19 +1310,19 @@ function closeSettings() {
   document.getElementById('settings-overlay').classList.add('hidden');
 }
 
-async function browseScript() {
-  const scriptPath = await window.api.selectScriptFile();
-  if (scriptPath) {
-    document.getElementById('setting-script-path').value = scriptPath;
-    await verifyScriptUI(scriptPath);
+async function browseStitcherExe() {
+  const exePath = await window.api.selectStitcherExe();
+  if (exePath) {
+    document.getElementById('setting-stitcher-exe').value = exePath;
+    await verifyStitcherUI(exePath);
   }
 }
 
-async function verifyScriptUI(scriptPath) {
-  const statusEl = document.getElementById('setting-script-status');
-  const result = await window.api.verifyScript(scriptPath);
+async function verifyStitcherUI(exePath) {
+  const statusEl = document.getElementById('setting-stitcher-status');
+  const result = await window.api.verifyStitcherExe(exePath);
   if (result.valid) {
-    statusEl.textContent = '\u2713 Script found';
+    statusEl.textContent = '\u2713 eBL Photo Stitcher found';
     statusEl.className = 'settings-hint valid';
   } else {
     statusEl.textContent = '\u2717 ' + result.reason;
@@ -1322,18 +1330,9 @@ async function verifyScriptUI(scriptPath) {
   }
 }
 
-async function generateTemplate() {
-  const filePath = await window.api.generateTemplateScript();
-  if (filePath) {
-    document.getElementById('setting-script-path').value = filePath;
-    await verifyScriptUI(filePath);
-    setStatus(`Template script created: ${filePath} — edit it to set your stitcher path.`);
-  }
-}
-
 async function saveSettings() {
   const config = {
-    scriptPath: document.getElementById('setting-script-path').value.trim(),
+    stitcherExe: document.getElementById('setting-stitcher-exe').value.trim(),
   };
   await window.api.saveStitcherConfig(config);
   setStatus('Settings saved.');
@@ -1383,15 +1382,15 @@ async function reprocessAll() {
 
 async function runStitcher(tablets) {
   const config = await window.api.getStitcherConfig();
-  if (!config.scriptPath) {
-    alert('Processing script not configured. Open Settings (gear icon) to set it up.');
+  if (!config.stitcherExe) {
+    alert('eBL Photo Stitcher not configured. Open Settings (gear icon) to set it up.');
     openSettings();
     return;
   }
 
-  const verification = await window.api.verifyScript(config.scriptPath);
+  const verification = await window.api.verifyStitcherExe(config.stitcherExe);
   if (!verification.valid) {
-    alert(`Script error: ${verification.reason}\n\nOpen Settings to fix.`);
+    alert(`Stitcher not found: ${verification.reason}\n\nOpen Settings to fix.`);
     openSettings();
     return;
   }

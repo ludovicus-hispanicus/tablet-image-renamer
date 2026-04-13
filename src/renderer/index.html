@@ -275,20 +275,17 @@
   <div id="settings-overlay" class="hidden">
     <div id="settings-panel">
       <div id="settings-header">
-        <h3>Processing Script</h3>
+        <h3>Settings</h3>
         <button id="settings-close">&times;</button>
       </div>
       <div id="settings-content">
         <div class="settings-row">
-          <label>Script file (.bat / .sh / .py / .exe):</label>
+          <label>eBL Photo Stitcher:</label>
           <div class="settings-input-row">
-            <input type="text" id="setting-script-path" placeholder="Path to processing script" />
-            <button id="setting-browse-script">Browse</button>
+            <input type="text" id="setting-stitcher-exe" placeholder="Path to eBL Photo Stitcher" readonly />
+            <button id="setting-browse-stitcher">Browse</button>
           </div>
-          <div id="setting-script-status" class="settings-hint"></div>
-        </div>
-        <div class="settings-row">
-          <p class="settings-hint">The script receives the root folder path as the first argument, followed by tablet names to process. <a href="#" id="setting-generate-template">Generate a template script</a> to get started.</p>
+          <div id="setting-stitcher-status" class="settings-hint"></div>
         </div>
         <div class="settings-footer">
           <button id="settings-save" class="btn-save">Save Settings</button>

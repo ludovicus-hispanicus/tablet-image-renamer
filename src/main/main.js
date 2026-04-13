@@ -5,9 +5,9 @@ const { scanFolder, generateThumbnail, renameFiles, getImageInfo } = require('./
 const {
   loadStitcherConfig,
   saveStitcherConfig,
-  verifyScript,
-  generateTemplateScript,
-  runProcessingScript,
+  verifyStitcherExe,
+  autoDetectStitcherExe,
+  runStitcherHeadless,
 } = require('./stitcher-bridge');
 
 // Hot reload in dev mode — watches renderer files (HTML, CSS, JS)
@@ -123,35 +123,30 @@ ipcMain.handle('save-stitcher-config', async (event, config) => {
   return saveStitcherConfig(config);
 });
 
-ipcMain.handle('verify-script', async (event, scriptPath) => {
-  return verifyScript(scriptPath);
+ipcMain.handle('verify-stitcher-exe', async (event, exePath) => {
+  return verifyStitcherExe(exePath);
 });
 
-ipcMain.handle('select-script-file', async () => {
+ipcMain.handle('auto-detect-stitcher', async () => {
+  return autoDetectStitcherExe();
+});
+
+ipcMain.handle('select-stitcher-exe', async () => {
+  const filters = process.platform === 'win32'
+    ? [{ name: 'Executable', extensions: ['exe'] }, { name: 'All Files', extensions: ['*'] }]
+    : [{ name: 'All Files', extensions: ['*'] }];
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
-    title: 'Select processing script',
-    filters: [
-      { name: 'Scripts', extensions: ['bat', 'cmd', 'sh', 'py', 'exe'] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
+    title: 'Select eBL Photo Stitcher',
+    filters,
   });
   if (result.canceled) return null;
   return result.filePaths[0];
 });
 
-ipcMain.handle('generate-template-script', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
-    title: 'Choose where to save the template script',
-  });
-  if (result.canceled) return null;
-  return generateTemplateScript(result.filePaths[0]);
-});
-
 ipcMain.handle('process-tablets', async (event, rootFolder, tablets) => {
   const config = loadStitcherConfig();
-  return runProcessingScript(config.scriptPath, rootFolder, tablets, (progress) => {
+  return runStitcherHeadless(config.stitcherExe, rootFolder, tablets, (progress) => {
     mainWindow.webContents.send('stitcher-progress', progress);
   });
 });

@@ -1028,7 +1028,7 @@ function showResultThumbnails() {
   for (let i = 0; i < resultsState.results.length; i++) {
     const result = resultsState.results[i];
     const review = resultsState.reviewStatus[result.name];
-    const statusClass = review?.status === 'revision' ? ' revision' : review?.status === 'updated' ? ' updated' : '';
+    const statusClass = review?.status ? ` ${review.status}` : '';
 
     const card = document.createElement('div');
     card.className = `result-card${statusClass}`;
@@ -1036,7 +1036,7 @@ function showResultThumbnails() {
 
     const badge = document.createElement('div');
     badge.className = 'result-badge';
-    badge.textContent = review?.status === 'updated' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
+    badge.textContent = statusBadge(review?.status);
     card.appendChild(badge);
 
     const imgEl = document.createElement('img');
@@ -1159,10 +1159,10 @@ async function setResultStatus(newStatus) {
   // Update thumbnail card classes and badge
   const card = document.querySelector(`.result-card[data-index="${resultsState.currentIndex}"]`);
   if (card) {
-    card.classList.remove('revision', 'updated');
+    card.classList.remove('revision', 'updated', 'sent');
     if (review?.status) card.classList.add(review.status);
     const badge = card.querySelector('.result-badge');
-    if (badge) badge.textContent = review?.status === 'updated' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
+    if (badge) badge.textContent = statusBadge(review?.status);
   }
 
   updateTreeStatusIcons();
@@ -1176,20 +1176,29 @@ function updateResultPreviewUI(review) {
   // Update buttons
   document.getElementById('result-toggle-revision').classList.toggle('active', review?.status === 'revision');
   document.getElementById('result-toggle-updated').classList.toggle('active', review?.status === 'updated');
+  document.getElementById('result-toggle-sent').classList.toggle('active', review?.status === 'sent');
 
   // Update info text
-  const statusLabel = review?.status === 'revision' ? '  [REVISION]'
-    : review?.status === 'updated' ? '  [UPDATED]' : '';
+  const statusLabels = { revision: '  [REVISION]', updated: '  [UPDATED]', sent: '  [SENT]' };
+  const statusLabel = statusLabels[review?.status] || '';
   const total = resultsState.results.length;
   document.getElementById('result-preview-info').textContent =
     `${result.name}${statusLabel}  |  ${resultsState.currentIndex + 1}/${total}  |  \u2190\u2192 navigate  |  R revision  |  U updated  |  Esc close`;
+}
+
+function statusBadge(status) {
+  if (status === 'updated') return '\uD83D\uDFE2';
+  if (status === 'sent') return '\uD83D\uDFE1';
+  return '\uD83D\uDD34';
 }
 
 function updateResultSummary() {
   const statuses = Object.values(resultsState.reviewStatus);
   const revCount = statuses.filter(r => r.status === 'revision').length;
   const updCount = statuses.filter(r => r.status === 'updated').length;
+  const sentCount = statuses.filter(r => r.status === 'sent').length;
   const parts = [`${resultsState.results.length} results`];
+  if (sentCount) parts.push(`${sentCount} sent`);
   if (revCount) parts.push(`${revCount} revision`);
   if (updCount) parts.push(`${updCount} updated`);
   document.getElementById('result-summary').textContent = parts.join('  |  ');
@@ -1229,17 +1238,22 @@ function updateTreeStatusIcons() {
     if (oldIcon) oldIcon.remove();
 
     const review = resultsState.reviewStatus[sub.name];
-    if (review?.status === 'revision' || review?.status === 'updated') {
+    if (review?.status) {
       const icon = document.createElement('span');
       icon.className = 'tree-status';
-      icon.textContent = review.status === 'updated' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
-      icon.title = review.status === 'revision'
-        ? 'Needs revision — click to mark as updated'
-        : 'Updated — click to clear';
-      icon.addEventListener('click', (e) => {
-        e.stopPropagation(); // don't navigate to the subfolder
-        toggleTreeStatus(sub.name);
-      });
+      icon.textContent = statusBadge(review.status);
+      const titles = {
+        revision: 'Needs revision — click to mark as updated',
+        updated: 'Updated — click to clear',
+        sent: 'Sent to stitcher — review needed',
+      };
+      icon.title = titles[review.status] || '';
+      if (review.status !== 'sent') {
+        icon.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleTreeStatus(sub.name);
+        });
+      }
       item.appendChild(icon);
     }
   });
@@ -1274,10 +1288,10 @@ async function toggleTreeStatus(tabletName) {
     const card = document.querySelector(`.result-card[data-index="${resultIdx}"]`);
     if (card) {
       const review = resultsState.reviewStatus[tabletName];
-      card.classList.remove('revision', 'updated');
+      card.classList.remove('revision', 'updated', 'sent');
       if (review?.status) card.classList.add(review.status);
       const badge = card.querySelector('.result-badge');
-      if (badge) badge.textContent = review?.status === 'updated' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
+      if (badge) badge.textContent = statusBadge(review?.status);
     }
   }
 }
@@ -1405,20 +1419,36 @@ async function runStitcher(tablets) {
 
   setStatus('Stitcher running...');
 
+  // Track which tablets were sent
+  const sentTablets = tablets || state.subfolders.map(s => s.name);
+
   const result = await window.api.processTablets(state.rootFolder, tablets);
 
   isStitcherRunning = false;
   document.getElementById('btn-reprocess-updated').disabled = false;
   document.getElementById('btn-reprocess-all').disabled = false;
 
-  if (result.success) {
-    setStatus('Stitcher finished successfully.');
-    statusEl.textContent += '\n=== DONE ===\n';
-    await loadResults();
-  } else {
-    setStatus(`Stitcher failed: ${result.error || 'exit code ' + result.exitCode}`);
-    statusEl.textContent += `\n=== ERROR: ${result.error || 'exit code ' + result.exitCode} ===\n`;
+  // Mark all sent tablets as 'sent' (yellow) so user knows to review them
+  for (const name of sentTablets) {
+    const existing = resultsState.reviewStatus[name] || {};
+    resultsState.reviewStatus[name] = {
+      ...existing,
+      status: 'sent',
+      reviewedAt: new Date().toISOString(),
+    };
   }
+  await window.api.saveReviewStatus(state.rootFolder, resultsState.reviewStatus);
+
+  if (result.success) {
+    setStatus('Stitcher finished. Review the results.');
+    statusEl.textContent += '\n=== DONE ===\n';
+  } else {
+    setStatus(`Stitcher finished with errors. Review the results.`);
+    statusEl.textContent += `\n=== FINISHED (exit code ${result.exitCode}) ===\n`;
+  }
+
+  await loadResults();
+  updateTreeStatusIcons();
 }
 
 function handleStitcherProgress(event) {

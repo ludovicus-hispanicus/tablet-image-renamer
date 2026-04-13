@@ -669,6 +669,8 @@ main {
   max-height: 150px;
   overflow-y: auto;
   white-space: pre-wrap;
+  user-select: text;
+  cursor: text;
   font-family: monospace;
 }
 
@@ -855,6 +857,10 @@ main {
   border-color: #4caf50;
 }
 
+.result-card.sent {
+  border-color: #ff9800;
+}
+
 .result-card.selected.revision {
   border-color: var(--highlight);
   box-shadow: 0 0 0 2px var(--highlight), 0 0 0 4px #f44336;
@@ -863,6 +869,11 @@ main {
 .result-card.selected.updated {
   border-color: var(--highlight);
   box-shadow: 0 0 0 2px var(--highlight), 0 0 0 4px #4caf50;
+}
+
+.result-card.selected.sent {
+  border-color: var(--highlight);
+  box-shadow: 0 0 0 2px var(--highlight), 0 0 0 4px #ff9800;
 }
 
 .result-card img {
@@ -890,7 +901,8 @@ main {
 }
 
 .result-card.revision .result-badge,
-.result-card.updated .result-badge {
+.result-card.updated .result-badge,
+.result-card.sent .result-badge {
   display: block;
 }
 
@@ -949,6 +961,21 @@ main {
 #result-toggle-updated.active {
   background: rgba(76, 175, 80, 0.4) !important;
   border-color: #4caf50 !important;
+}
+
+#result-toggle-sent {
+  font-size: 12px !important;
+  padding: 4px 12px !important;
+  width: auto !important;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+#result-toggle-sent.active {
+  background: rgba(255, 152, 0, 0.4) !important;
+  border-color: #ff9800 !important;
+  pointer-events: auto;
+  opacity: 1;
 }
 
 #result-preview-close {

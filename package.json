@@ -1,6 +1,6 @@
 {
   "name": "tablet-image-renamer",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Visual drag-and-drop tool for renaming cuneiform tablet photographs",
   "main": "src/main/main.js",
   "scripts": {
@@ -45,7 +45,10 @@
     },
     "mac": {
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
       ],
       "category": "public.app-category.productivity",
       "identity": null

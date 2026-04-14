@@ -37,6 +37,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Ad-hoc codesign (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for app in dist/mac*/*.app; do
+            if [ -d "$app" ]; then
+              echo "Signing $app"
+              codesign --force --deep --sign - "$app"
+            fi
+          done
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

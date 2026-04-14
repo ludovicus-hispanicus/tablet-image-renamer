@@ -35,8 +35,8 @@ jobs:
       - name: Install sharp cross-platform binaries (macOS)
         if: runner.os == 'macOS'
         run: |
-          npm install --force @img/sharp-darwin-x64 @img/sharp-libvips-darwin-x64
-          npm install --force @img/sharp-darwin-arm64 @img/sharp-libvips-darwin-arm64
+          npm install --force @img/sharp-darwin-x64@0.33.5 @img/sharp-libvips-darwin-x64@1.0.4
+          npm install --force @img/sharp-darwin-arm64@0.33.5 @img/sharp-libvips-darwin-arm64@1.0.4
 
       - name: Build
         run: npm run ${{ matrix.script }}

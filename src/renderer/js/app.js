@@ -66,6 +66,7 @@ dom.btnReset.addEventListener('click', onReset);
 document.getElementById('btn-mode-renamer').addEventListener('click', () => switchMode('renamer'));
 document.getElementById('btn-mode-picker').addEventListener('click', () => switchMode('picker'));
 document.getElementById('btn-export-selected').addEventListener('click', onExportSelected);
+document.getElementById('btn-process').addEventListener('click', onProcessReady);
 
 // Viewer mode controls
 document.getElementById('viewer-back').addEventListener('click', exitViewerMode);
@@ -235,9 +236,14 @@ async function openFolder(folder) {
 
   setStatus(`Found ${state.subfolders.length} subfolder(s) with ${result.totalImages} images.`);
   state.currentIndex = 0;
+
+  // Load statuses early so tree icons show immediately
+  resultsState.reviewStatus = await window.api.loadReviewStatus(folder);
+
   buildTreeView();
   loadResults();
   loadCurrentSubfolder();
+  updateTreeStatusIcons();
 }
 
 // Restore last folder on startup
@@ -1301,37 +1307,55 @@ function updateTreeStatusIcons() {
     if (oldIcon) oldIcon.remove();
 
     const review = resultsState.reviewStatus[sub.name];
+    const icon = document.createElement('span');
+    icon.className = 'tree-status';
+
     if (review?.status) {
-      const icon = document.createElement('span');
-      icon.className = 'tree-status';
       icon.textContent = statusBadge(review.status);
       const titles = {
-        revision: 'Needs revision — click to mark as updated',
-        updated: 'Updated — click to clear',
-        sent: 'Sent to stitcher — review needed',
+        revision: 'Needs revision \u2192 click: clear',
+        updated: 'Ready \u2192 click: revision',
+        sent: 'Sent \u2192 click: clear',
       };
       icon.title = titles[review.status] || '';
-      icon.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleTreeStatus(sub.name);
-      });
-      item.appendChild(icon);
+    } else {
+      icon.textContent = '\u25CB';  // empty circle
+      icon.title = 'Click to mark as ready';
+      icon.classList.add('tree-status-empty');
     }
+
+    icon.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleTreeStatus(sub.name);
+    });
+    item.appendChild(icon);
   });
+
+  updateProcessButton();
 }
 
 async function toggleTreeStatus(tabletName) {
   const existing = resultsState.reviewStatus[tabletName] || {};
 
-  if (existing.status === 'revision') {
-    // revision → updated
+  // Cycle: none → updated (green) → revision (red) → clear
+  // Yellow (sent) → click → clear
+  let nextStatus;
+  if (!existing.status) {
+    nextStatus = 'updated';
+  } else if (existing.status === 'updated') {
+    nextStatus = 'revision';
+  } else {
+    // revision, sent, anything else → clear
+    nextStatus = null;
+  }
+
+  if (nextStatus) {
     resultsState.reviewStatus[tabletName] = {
       ...existing,
-      status: 'updated',
+      status: nextStatus,
       reviewedAt: new Date().toISOString(),
     };
   } else {
-    // updated / sent / anything → clear
     delete existing.status;
     delete existing.reviewedAt;
     if (!existing.notes) {
@@ -1414,8 +1438,39 @@ async function saveSettings() {
   closeSettings();
 }
 
-// === Stitcher Reprocessing ===
+// === Stitcher Processing ===
 let isStitcherRunning = false;
+
+function updateProcessButton() {
+  const btn = document.getElementById('btn-process');
+  const readyCount = Object.values(resultsState.reviewStatus)
+    .filter(r => r.status === 'updated').length;
+  btn.disabled = readyCount === 0 || isStitcherRunning || !state.rootFolder;
+  btn.title = readyCount > 0
+    ? `Process ${readyCount} ready (green) folder(s)`
+    : 'Mark folders as ready (green) in the tree first';
+}
+
+async function onProcessReady() {
+  if (isStitcherRunning) {
+    alert('Stitcher is already running.');
+    return;
+  }
+
+  const ready = Object.entries(resultsState.reviewStatus)
+    .filter(([, v]) => v.status === 'updated')
+    .map(([name]) => name);
+
+  if (ready.length === 0) {
+    alert('No folders are marked as ready (green).\n\nClick the circle next to a folder name in the tree to mark it.');
+    return;
+  }
+
+  const ok = confirm(`Process ${ready.length} ready folder(s)?\n\n${ready.join('\n')}`);
+  if (!ok) return;
+
+  await runStitcher(ready);
+}
 
 async function reprocessUpdated() {
   if (isStitcherRunning) {

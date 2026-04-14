@@ -53,35 +53,44 @@ function scanResults(rootFolder) {
 }
 
 /**
- * Load review status from _Final_JPG/review_status.json
+ * Load review status. Checks root folder first, then legacy _Final_JPG/ location.
  * Returns { tabletName: { status, notes, reviewedBy, reviewedAt } }
  */
 function loadReviewStatus(rootFolder) {
-  const statusFile = path.join(rootFolder, FINAL_JPG_FOLDER, REVIEW_STATUS_FILE);
-
-  if (!fs.existsSync(statusFile)) return {};
-
-  try {
-    const data = fs.readFileSync(statusFile, 'utf8');
-    return JSON.parse(data);
-  } catch (err) {
-    console.error('Error loading review status:', err.message);
-    return {};
+  // Primary: root-level file
+  const rootFile = path.join(rootFolder, REVIEW_STATUS_FILE);
+  if (fs.existsSync(rootFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(rootFile, 'utf8'));
+    } catch (err) {
+      console.error('Error loading review status:', err.message);
+    }
   }
+
+  // Legacy: _Final_JPG/review_status.json
+  const legacyFile = path.join(rootFolder, FINAL_JPG_FOLDER, REVIEW_STATUS_FILE);
+  if (fs.existsSync(legacyFile)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(legacyFile, 'utf8'));
+      // Migrate: save to root level
+      saveReviewStatus(rootFolder, data);
+      return data;
+    } catch (err) {
+      console.error('Error loading legacy review status:', err.message);
+    }
+  }
+
+  return {};
 }
 
 /**
- * Save review status to _Final_JPG/review_status.json
+ * Save review status to root folder (review_status.json).
  */
 function saveReviewStatus(rootFolder, status) {
-  const jpgFolder = path.join(rootFolder, FINAL_JPG_FOLDER);
-  if (!fs.existsSync(jpgFolder)) return false;
-
-  const statusFile = path.join(jpgFolder, REVIEW_STATUS_FILE);
+  const statusFile = path.join(rootFolder, REVIEW_STATUS_FILE);
 
   try {
     fs.writeFileSync(statusFile, JSON.stringify(status, null, 2), 'utf8');
-    console.log(`Review status saved: ${Object.keys(status).length} entries`);
     return true;
   } catch (err) {
     console.error('Error saving review status:', err.message);

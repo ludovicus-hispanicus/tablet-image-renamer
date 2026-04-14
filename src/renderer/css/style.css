@@ -22,6 +22,15 @@
   --drag-over: rgba(91, 155, 213, 0.3);
 }
 
+/* Picker mode overrides */
+body.picker-mode {
+  --accent: #e8a035;
+  --accent-hover: #f0b550;
+  --highlight: #e8a035;
+  --slot-assigned: #5c4a1e;
+  --drag-over: rgba(232, 160, 53, 0.3);
+}
+
 body {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   background: var(--bg);
@@ -71,6 +80,39 @@ body {
 
 #topbar .btn-save:hover:not(:disabled) {
   background: var(--success);
+}
+
+/* Mode toggle */
+#mode-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-left: 4px;
+}
+
+.mode-btn {
+  padding: 4px 14px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: var(--bg) !important;
+  color: var(--text-dim) !important;
+  font-size: 12px !important;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mode-btn:hover {
+  background: var(--bg-card) !important;
+  color: var(--text) !important;
+}
+
+.mode-btn.active {
+  background: var(--accent) !important;
+  color: #fff !important;
+  font-weight: 600;
 }
 
 #topbar #btn-settings {
@@ -1532,3 +1574,131 @@ main {
   color: var(--text-dim);
   min-width: 50px;
 }
+
+/* === Picker Mode Panel === */
+#picker-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0 10px 10px;
+}
+
+#picker-panel.hidden {
+  display: none;
+}
+
+#picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+#picker-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+#picker-count {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+#picker-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pick-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-card);
+  border-radius: 4px;
+  border-left: 3px solid var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pick-item:hover {
+  background: var(--slot-hover);
+}
+
+.pick-item .pick-code {
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 28px;
+}
+
+.pick-item .pick-name {
+  flex: 1;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-item .pick-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 3px;
+}
+
+.pick-item .pick-remove {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.pick-item .pick-remove:hover {
+  color: #f44336;
+}
+
+#picker-actions {
+  flex-shrink: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+}
+
+#picker-actions .btn-save {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#picker-actions .btn-save:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+#picker-actions .btn-save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Hide renamer-specific elements in picker mode */
+body.picker-mode #right-tabs { display: none; }
+body.picker-mode .tab-content { display: none !important; }
+body.picker-mode #picker-panel { display: flex; }
+
+/* Hide picker panel in renamer mode (default) */
+body:not(.picker-mode) #picker-panel { display: none; }

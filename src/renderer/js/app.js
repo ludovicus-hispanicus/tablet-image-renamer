@@ -1,4 +1,6 @@
 // === State ===
+let appMode = 'renamer'; // 'renamer' or 'picker'
+
 const state = {
   rootFolder: null,
   subfolders: [],
@@ -7,7 +9,7 @@ const state = {
   selectedImage: null,       // primary selection (for assignment)
   selectedImages: new Set(),  // multi-selection (for rotation, etc.)
   lastClickedIndex: -1,       // for shift-click range selection
-  assignments: {},            // imagePath -> viewCode
+  assignments: {},            // imagePath -> viewCode (used by both modes)
   reverseAssignments: {},     // viewCode -> imagePath
   comboPending: null,
   comboTimer: null,
@@ -59,6 +61,11 @@ dom.btnNext.addEventListener('click', () => navigateSubfolder(1));
 dom.btnSkip.addEventListener('click', () => navigateSubfolder(1));
 dom.btnConfirm.addEventListener('click', onConfirm);
 dom.btnReset.addEventListener('click', onReset);
+
+// Mode toggle
+document.getElementById('btn-mode-renamer').addEventListener('click', () => switchMode('renamer'));
+document.getElementById('btn-mode-picker').addEventListener('click', () => switchMode('picker'));
+document.getElementById('btn-export-selected').addEventListener('click', onExportSelected);
 
 // Viewer mode controls
 document.getElementById('viewer-back').addEventListener('click', exitViewerMode);
@@ -317,7 +324,23 @@ async function loadCurrentSubfolder() {
     selectImage(state.images[0].path);
   }
 
+  // In picker mode, load saved picks from picks.json
+  if (appMode === 'picker') {
+    const savedPicks = await window.api.loadPicks(sub.path);
+    // savedPicks maps filename -> viewCode. Translate to full paths.
+    if (savedPicks && Object.keys(savedPicks).length > 0) {
+      for (const [filename, viewCode] of Object.entries(savedPicks)) {
+        const img = state.images.find(i => i.name === filename);
+        if (img && !state.reverseAssignments[viewCode]) {
+          state.assignments[img.path] = viewCode;
+          state.reverseAssignments[viewCode] = img.path;
+        }
+      }
+    }
+  }
+
   updateStructureDiagram();
+  updatePickerList();
   updateButtons();
   updateStatusCount();
   updateResultsTab();
@@ -532,8 +555,10 @@ function assignCurrentImage(viewCode) {
 
   updateCardBadge(state.selectedImage);
   updateStructureDiagram();
+  updatePickerList();
   updateButtons();
   updateStatusCount();
+  if (appMode === 'picker') savePicksDebounced();
 
   autoAdvanceSelection();
 }
@@ -549,8 +574,10 @@ function unassignCurrentImage() {
 
   updateCardBadge(state.selectedImage);
   updateStructureDiagram();
+  updatePickerList();
   updateButtons();
   updateStatusCount();
+  if (appMode === 'picker') savePicksDebounced();
 }
 
 function autoAdvanceSelection() {
@@ -796,6 +823,11 @@ async function rotateSelected(degrees) {
 
 // === Confirm / Reset ===
 async function onConfirm() {
+  if (appMode === 'picker') {
+    await onExportSelected();
+    return;
+  }
+
   const count = Object.keys(state.assignments).length;
   if (count === 0) {
     alert('No images have been assigned.');
@@ -1472,6 +1504,144 @@ function handleStitcherProgress(event) {
     statusEl.scrollTop = statusEl.scrollHeight;
   }
 }
+
+// =====================================================================
+// Picker Mode
+// =====================================================================
+
+function switchMode(mode) {
+  if (mode === appMode) return;
+  appMode = mode;
+
+  document.getElementById('btn-mode-renamer').classList.toggle('active', mode === 'renamer');
+  document.getElementById('btn-mode-picker').classList.toggle('active', mode === 'picker');
+  document.body.classList.toggle('picker-mode', mode === 'picker');
+
+  localStorage.setItem('appMode', mode);
+
+  // Reload current subfolder to apply mode-specific logic
+  if (state.subfolders.length > 0 && state.currentIndex >= 0) {
+    loadCurrentSubfolder();
+  }
+}
+
+function updatePickerList() {
+  if (appMode !== 'picker') return;
+
+  const listEl = document.getElementById('picker-list');
+  const countEl = document.getElementById('picker-count');
+  const exportBtn = document.getElementById('btn-export-selected');
+  if (!listEl) return;
+
+  listEl.innerHTML = '';
+  const picks = Object.entries(state.assignments)
+    .sort(([, a], [, b]) => a.localeCompare(b));
+
+  countEl.textContent = `${picks.length} picked`;
+  exportBtn.disabled = picks.length === 0;
+
+  for (const [imgPath, code] of picks) {
+    const img = state.images.find(i => i.path === imgPath);
+    if (!img) continue;
+
+    const item = document.createElement('div');
+    item.className = 'pick-item';
+
+    const codeSpan = document.createElement('span');
+    codeSpan.className = 'pick-code';
+    codeSpan.textContent = code;
+    item.appendChild(codeSpan);
+
+    const viewSpan = document.createElement('span');
+    viewSpan.className = 'pick-name';
+    viewSpan.textContent = `${VIEW_CODES[code] || code} — ${img.name}`;
+    item.appendChild(viewSpan);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'pick-remove';
+    removeBtn.textContent = '\u00D7';
+    removeBtn.title = 'Remove pick';
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Unassign this pick
+      delete state.reverseAssignments[code];
+      delete state.assignments[imgPath];
+      updateCardBadge(imgPath);
+      updatePickerList();
+      updateStatusCount();
+      savePicksDebounced();
+    });
+    item.appendChild(removeBtn);
+
+    item.addEventListener('click', () => {
+      selectImage(imgPath);
+    });
+
+    listEl.appendChild(item);
+  }
+}
+
+let picksDebounceTimer = null;
+function savePicksDebounced() {
+  if (picksDebounceTimer) clearTimeout(picksDebounceTimer);
+  picksDebounceTimer = setTimeout(async () => {
+    const sub = state.subfolders[state.currentIndex];
+    if (!sub) return;
+    // Convert assignments (imagePath -> viewCode) to (filename -> viewCode)
+    const picks = {};
+    for (const [imgPath, viewCode] of Object.entries(state.assignments)) {
+      const img = state.images.find(i => i.path === imgPath);
+      if (img) picks[img.name] = viewCode;
+    }
+    await window.api.savePicks(sub.path, picks);
+  }, 500);
+}
+
+async function onExportSelected() {
+  const count = Object.keys(state.assignments).length;
+  if (count === 0) {
+    alert('No images have been picked.');
+    return;
+  }
+
+  const sub = state.subfolders[state.currentIndex];
+  const tabletName = sub.name.replace(/(\w+)\s+(\d+)/g, '$1.$2');
+
+  const lines = Object.entries(state.assignments)
+    .sort(([, a], [, b]) => a.localeCompare(b))
+    .map(([imgPath, code]) => {
+      const img = state.images.find(i => i.path === imgPath);
+      const ext = img ? img.ext : '.jpg';
+      return `  ${img?.name || '?'}  \u2192  ${tabletName}_${code}${ext}`;
+    });
+
+  const ok = confirm(
+    `Export ${count} picked image(s) to _Selected/${tabletName}/ ?\n\n${lines.join('\n')}`
+  );
+  if (!ok) return;
+
+  setStatus('Exporting selected images...');
+
+  const result = await window.api.exportSelected(
+    state.rootFolder,
+    tabletName,
+    state.assignments,
+  );
+
+  if (result.success) {
+    setStatus(`Exported ${result.count} image(s) to _Selected/${tabletName}/`);
+  } else {
+    setStatus(`Export failed: ${result.error}`);
+  }
+}
+
+// Restore saved mode on startup
+(function restoreMode() {
+  const saved = localStorage.getItem('appMode');
+  if (saved === 'picker') {
+    switchMode('picker');
+  }
+})();
 
 // =====================================================================
 // Tools tab + Viewer rectangle drawing

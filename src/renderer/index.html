@@ -11,6 +11,10 @@
   <header id="topbar">
     <button id="btn-browse" title="Open folder">Open Folder</button>
     <span id="folder-path">No folder selected</span>
+    <div id="mode-toggle">
+      <button id="btn-mode-renamer" class="mode-btn active">Renamer</button>
+      <button id="btn-mode-picker" class="mode-btn">Picker</button>
+    </div>
     <div id="subfolder-nav">
       <button id="btn-prev" disabled>&larr; Prev</button>
       <span id="subfolder-info">-</span>
@@ -72,10 +76,23 @@
 
     <!-- Right Panel: Tabs (Structure / Results) -->
     <section id="panel-right">
+      <!-- Renamer mode tabs -->
       <div id="right-tabs">
         <button class="right-tab active" data-tab="structure">Structure</button>
         <button class="right-tab" data-tab="tools">Tools</button>
         <button class="right-tab" data-tab="results">Results</button>
+      </div>
+
+      <!-- Picker mode panel (replaces tabs in picker mode) -->
+      <div id="picker-panel" class="hidden">
+        <div id="picker-header">
+          <span id="picker-title">Picks</span>
+          <span id="picker-count">0 picked</span>
+        </div>
+        <div id="picker-list"></div>
+        <div id="picker-actions">
+          <button id="btn-export-selected" class="btn-save" disabled>Export Selected</button>
+        </div>
       </div>
 
       <!-- Structure Tab -->

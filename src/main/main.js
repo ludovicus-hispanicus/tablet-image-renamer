@@ -151,6 +151,63 @@ ipcMain.handle('process-tablets', async (event, rootFolder, tablets) => {
   });
 });
 
+// === Picker Mode ===
+
+const PICKS_FILE = 'picks.json';
+const SELECTED_FOLDER = '_Selected';
+
+ipcMain.handle('load-picks', async (event, subfolderPath) => {
+  const picksFile = path.join(subfolderPath, PICKS_FILE);
+  if (!fs.existsSync(picksFile)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(picksFile, 'utf8'));
+  } catch (e) {
+    return {};
+  }
+});
+
+ipcMain.handle('save-picks', async (event, subfolderPath, picks) => {
+  const picksFile = path.join(subfolderPath, PICKS_FILE);
+  try {
+    fs.writeFileSync(picksFile, JSON.stringify(picks, null, 2));
+    return true;
+  } catch (e) {
+    console.error('Error saving picks:', e.message);
+    return false;
+  }
+});
+
+ipcMain.handle('export-selected', async (event, rootFolder, subfolderName, picks) => {
+  // picks is { imagePath: viewCode }
+  // Copy each picked image to _Selected/{subfolderName}/{name}_{viewCode}.ext
+  const selectedDir = path.join(rootFolder, SELECTED_FOLDER, subfolderName);
+  try {
+    fs.mkdirSync(selectedDir, { recursive: true });
+
+    // Clear old selected files for this tablet
+    if (fs.existsSync(selectedDir)) {
+      for (const f of fs.readdirSync(selectedDir)) {
+        fs.unlinkSync(path.join(selectedDir, f));
+      }
+    }
+
+    const results = [];
+    for (const [imagePath, viewCode] of Object.entries(picks)) {
+      const ext = path.extname(imagePath).toLowerCase();
+      const outName = `${subfolderName}_${viewCode}${ext}`;
+      const outPath = path.join(selectedDir, outName);
+      fs.copyFileSync(imagePath, outPath);
+      results.push({ source: path.basename(imagePath), dest: outName, status: 'ok' });
+    }
+
+    console.log(`Exported ${results.length} picks to ${selectedDir}`);
+    return { success: true, count: results.length, outputDir: selectedDir };
+  } catch (err) {
+    console.error('Export error:', err.message);
+    return { success: false, error: err.message };
+  }
+});
+
 // Clean cached _object.tif and _ruler.tif files from tablet subfolders
 // so the stitcher re-extracts from the (possibly edited) source images.
 ipcMain.handle('clean-tablet-cache', async (event, rootFolder, tabletNames) => {

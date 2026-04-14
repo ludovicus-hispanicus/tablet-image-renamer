@@ -580,6 +580,27 @@ function unassignCurrentImage() {
   if (appMode === 'picker') savePicksDebounced();
 }
 
+function togglePick() {
+  if (!state.selectedImage || appMode !== 'picker') return;
+
+  const existing = state.assignments[state.selectedImage];
+  if (existing) {
+    // Already picked (named or unnamed) — unpick it
+    delete state.reverseAssignments[existing];
+    delete state.assignments[state.selectedImage];
+  } else {
+    // Pick without a view code
+    state.assignments[state.selectedImage] = 'pick';
+  }
+
+  updateCardBadge(state.selectedImage);
+  updatePickerList();
+  updateButtons();
+  updateStatusCount();
+  savePicksDebounced();
+  autoAdvanceSelection();
+}
+
 function autoAdvanceSelection() {
   const currentIdx = state.images.findIndex(img => img.path === state.selectedImage);
 
@@ -677,7 +698,10 @@ function onKeyDown(e) {
     return;
   }
 
-  if (key === 'u') {
+  if (key === 'p' && appMode === 'picker') {
+    togglePick();
+    e.preventDefault();
+  } else if (key === 'u') {
     unassignCurrentImage();
     e.preventDefault();
   } else if (e.key === 'ArrowLeft' && e.shiftKey) {
@@ -929,7 +953,10 @@ function updateCardBadge(imagePath, forceRemove = false) {
   const code = forceRemove ? null : state.assignments[imagePath];
   const badge = card.querySelector('.thumb-badge');
 
-  if (code) {
+  if (code === 'pick') {
+    badge.textContent = '\u2713';
+    card.classList.add('assigned');
+  } else if (code) {
     badge.textContent = `_${code}`;
     card.classList.add('assigned');
   } else {
@@ -991,14 +1018,17 @@ function updateStatusCount() {
   } else if (state.selectedImage) {
     const name = state.images.find(i => i.path === state.selectedImage)?.name || 'none';
     const code = state.assignments[state.selectedImage];
-    const codePart = code ? ` \u2192 _${code} (${VIEW_CODES[code]})` : '';
+    const codePart = code === 'pick' ? ' \u2713 picked'
+      : code ? ` \u2192 _${code} (${VIEW_CODES[code]})` : '';
     selText = `Selected: ${name}${codePart}`;
   } else {
     selText = 'No selection';
   }
 
   dom.statusText.textContent = selText;
-  dom.statusCount.textContent = `${assigned} / ${total} assigned`;
+  dom.statusCount.textContent = appMode === 'picker'
+    ? `${assigned} / ${total} picked`
+    : `${assigned} / ${total} assigned`;
 }
 
 // === Results System ===
@@ -1549,12 +1579,12 @@ function updatePickerList() {
 
     const codeSpan = document.createElement('span');
     codeSpan.className = 'pick-code';
-    codeSpan.textContent = code;
+    codeSpan.textContent = code === 'pick' ? '\u2713' : code;
     item.appendChild(codeSpan);
 
     const viewSpan = document.createElement('span');
     viewSpan.className = 'pick-name';
-    viewSpan.textContent = `${VIEW_CODES[code] || code} — ${img.name}`;
+    viewSpan.textContent = code === 'pick' ? img.name : `${VIEW_CODES[code] || code} — ${img.name}`;
     item.appendChild(viewSpan);
 
     const removeBtn = document.createElement('button');
@@ -1611,6 +1641,9 @@ async function onExportSelected() {
     .sort(([, a], [, b]) => a.localeCompare(b))
     .map(([imgPath, code]) => {
       const img = state.images.find(i => i.path === imgPath);
+      if (code === 'pick') {
+        return `  ${img?.name || '?'}  (unnamed pick)`;
+      }
       const ext = img ? img.ext : '.jpg';
       return `  ${img?.name || '?'}  \u2192  ${tabletName}_${code}${ext}`;
     });

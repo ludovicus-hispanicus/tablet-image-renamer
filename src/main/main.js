@@ -193,8 +193,14 @@ ipcMain.handle('export-selected', async (event, rootFolder, subfolderName, picks
 
     const results = [];
     for (const [imagePath, viewCode] of Object.entries(picks)) {
-      const ext = path.extname(imagePath).toLowerCase();
-      const outName = `${subfolderName}_${viewCode}${ext}`;
+      let outName;
+      if (viewCode === 'pick') {
+        // Unnamed pick — keep original filename
+        outName = path.basename(imagePath);
+      } else {
+        const ext = path.extname(imagePath).toLowerCase();
+        outName = `${subfolderName}_${viewCode}${ext}`;
+      }
       const outPath = path.join(selectedDir, outName);
       fs.copyFileSync(imagePath, outPath);
       results.push({ source: path.basename(imagePath), dest: outName, status: 'ok' });

@@ -65,10 +65,10 @@
           <button id="viewer-next" class="viewer-nav" title="Next image">&rarr;</button>
           <div id="viewer-rect-overlay" class="hidden">
             <div id="viewer-rect-box"></div>
-            <div id="viewer-rect-actions" class="hidden">
-              <button id="viewer-rect-apply" class="rect-btn rect-btn-apply">Apply</button>
-              <button id="viewer-rect-cancel" class="rect-btn">Cancel</button>
-            </div>
+          </div>
+          <div id="seg-canvas-container" class="hidden">
+            <canvas id="seg-canvas-mask"></canvas>
+            <canvas id="seg-canvas-interaction"></canvas>
           </div>
         </div>
       </div>
@@ -243,18 +243,34 @@
         <div class="tools-section">
           <div class="tools-section-label">Tools</div>
           <div class="tool-grid">
-            <button class="tool-btn" data-tool="trim" title="Trim to Object (T)">&#x2702;&#xFE0F;</button>
+            <button class="tool-btn" data-tool="segment" title="Segment Object (S)"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="2" width="16" height="16" rx="1" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2" fill="none"/><rect x="5" y="5" width="10" height="10" rx="1" fill="currentColor" opacity="0.5"/></svg></button>
           </div>
         </div>
 
-        <div class="tools-section" id="tool-options-trim">
-          <div class="tools-section-label">Trim Options</div>
+        <div class="tools-section" id="tool-options-segment">
+          <div class="tools-section-label">Segment Options</div>
+          <div class="tool-options-row">
+            <label>Mode:</label>
+            <button class="seg-mode-btn active" id="seg-mode-box" title="Draw bounding box (B)">Box</button>
+            <button class="seg-mode-btn" id="seg-mode-add" title="Add region (A)">+ Add</button>
+            <button class="seg-mode-btn" id="seg-mode-remove" title="Remove region (R)">&minus; Remove</button>
+          </div>
+          <div class="tool-options-row">
+            <label>Opacity:</label>
+            <input type="range" id="seg-opacity" min="0" max="100" value="50" />
+            <span id="seg-opacity-value">50%</span>
+          </div>
           <div class="tool-options-row">
             <label>Fill:</label>
-            <button class="bg-swatch active" id="bg-white" title="White fill"></button>
-            <button class="bg-swatch bg-black-swatch" id="bg-black" title="Black fill"></button>
+            <button class="bg-swatch active" id="seg-bg-white" title="White background"></button>
+            <button class="bg-swatch bg-black-swatch" id="seg-bg-black" title="Black background"></button>
           </div>
-          <p class="tools-hint">Drag a rectangle around the tablet in the viewer. The detector finds the tablet edges within your rectangle, pads 20&#x202F;px, and overwrites the file. The original is backed up to <code>_Raw/</code>.</p>
+          <div class="seg-actions">
+            <button class="seg-action-btn" id="seg-undo" disabled>Undo</button>
+            <button class="seg-action-btn" id="seg-clear" disabled>Clear</button>
+            <button class="seg-action-btn seg-action-primary" id="seg-apply" disabled>Apply</button>
+          </div>
+          <div id="seg-status" class="tools-hint">Draw a rectangle around the tablet to begin.</div>
         </div>
 
         <div class="tools-section">

@@ -27,6 +27,13 @@
       "src/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "python",
+        "to": "python",
+        "filter": ["**/*", "!weights/**", "!__pycache__/**", "!*.pyc"]
+      }
+    ],
     "win": {
       "target": [
         {

@@ -40,6 +40,15 @@ contextBridge.exposeInMainWorld('api', {
   revealInExplorer: (path) => ipcRenderer.invoke('reveal-in-explorer', path),
   rotateImage: (path, degrees) => ipcRenderer.invoke('rotate-image', path, degrees),
   rotateImagesBatch: (paths, degrees) => ipcRenderer.invoke('rotate-images-batch', paths, degrees),
-  trimInRect: (path, rect, bgColor) => ipcRenderer.invoke('trim-in-rect', path, rect, bgColor),
   deleteImage: (path) => ipcRenderer.invoke('delete-image', path),
+
+  // Segmentation
+  segStartServer: () => ipcRenderer.invoke('seg-start-server'),
+  segStopServer: () => ipcRenderer.invoke('seg-stop-server'),
+  segEncodeImage: (imagePath) => ipcRenderer.invoke('seg-encode-image', imagePath),
+  segPredictMask: (box, posPoints, negPoints) => ipcRenderer.invoke('seg-predict-mask', box, posPoints, negPoints),
+  segApplyMask: (imagePath, outputPath, maskBase64, bgColor) => ipcRenderer.invoke('seg-apply-mask', imagePath, outputPath, maskBase64, bgColor),
+  segServerStatus: () => ipcRenderer.invoke('seg-server-status'),
+  onSegProgress: (callback) => ipcRenderer.on('seg-progress', (event, data) => callback(data)),
+  offSegProgress: () => ipcRenderer.removeAllListeners('seg-progress'),
 });

@@ -799,10 +799,18 @@ function onKeyDown(e) {
       viewerNavigate(-1); e.preventDefault();
     } else if (e.key === 'ArrowRight') {
       viewerNavigate(1); e.preventDefault();
-    } else if (vKey === 't' && !e.ctrlKey) {
-      setActiveTool('trim'); e.preventDefault();
-    } else if (e.key === 'Enter' && previewTool.rectDisplay && !previewTool.drawing) {
-      applyViewerRect(); e.preventDefault();
+    } else if (vKey === 's' && !e.ctrlKey) {
+      setActiveTool('segment'); e.preventDefault();
+    } else if (previewTool.active === 'segment' && vKey === 'b' && !e.ctrlKey) {
+      setSegMode('box'); e.preventDefault();
+    } else if (previewTool.active === 'segment' && vKey === 'a' && !e.ctrlKey) {
+      setSegMode('add'); e.preventDefault();
+    } else if (previewTool.active === 'segment' && (vKey === 'r' || vKey === 'x') && !e.ctrlKey && !e.altKey) {
+      setSegMode('remove'); e.preventDefault();
+    } else if (previewTool.active === 'segment' && e.key === 'z' && e.ctrlKey) {
+      segUndo(); e.preventDefault();
+    } else if (e.key === 'Enter' && previewTool.active === 'segment' && segTool.currentMaskBase64) {
+      applySegMask(); e.preventDefault();
     } else if (vKey === 'p' && appMode === 'picker') {
       togglePick(); e.preventDefault();
     } else if (vKey === 'u') {
@@ -933,6 +941,7 @@ async function loadViewerImage(imagePath) {
   viewerCurrentPath = imagePath;
   dom.viewerImage.src = '';
   clearViewerRect();
+  if (previewTool.active === 'segment') clearSegState();
 
   const idx = state.images.findIndex(i => i.path === imagePath);
   const total = state.images.length;
@@ -2137,14 +2146,13 @@ async function onExportSelected() {
 })();
 
 // =====================================================================
-// Tools tab + Viewer rectangle drawing
+// Tools tab + Segmentation tool
 // =====================================================================
-// Tool: 'trim' (draw rectangle → trim) or null (no active tool, just viewing).
+// Tool: 'segment' (draw rectangle → SAM segmentation) or null.
 // Click the tool button to activate; click again (or Esc) to deactivate.
 
 const previewTool = {
   active: null,
-  bgColor: 'white',
   busy: false,
 
   // Rectangle drawing state (coords are relative to #viewer-stage)
@@ -2154,42 +2162,67 @@ const previewTool = {
   rectDisplay: null,    // {x, y, w, h} in #viewer-stage CSS pixels
 };
 
+const segTool = {
+  mode: 'box',           // 'box' | 'add' | 'remove'
+  bgColor: 'white',
+  maskOpacity: 0.5,
+
+  // Server state
+  serverReady: false,
+  imageEncoded: false,
+  encodedImagePath: null,
+  imageWidth: 0,            // actual original image dimensions (from SAM encode)
+  imageHeight: 0,
+
+  // Bounding box (normalized 0..1 coordinates)
+  box: null,              // { x1, y1, x2, y2 } in 0..1 range, or null
+
+  // Click points (normalized 0..1 coordinates)
+  positivePoints: [],     // [{x, y}, ...] in 0..1 range
+  negativePoints: [],     // [{x, y}, ...] in 0..1 range
+
+  // Current mask
+  currentMaskBase64: null,
+
+  // Canvas references (set on init)
+  maskCanvas: null,
+  maskCtx: null,
+  interCanvas: null,
+  interCtx: null,
+};
+
 function setActiveTool(toolName) {
-  // Toggle: clicking the already-active tool deactivates it
   const newTool = (previewTool.active === toolName) ? null : toolName;
   previewTool.active = newTool;
   document.querySelectorAll('.tool-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tool === newTool);
   });
-  document.getElementById('tool-options-trim').classList.toggle('visible', newTool === 'trim');
-  dom.viewerStage.classList.toggle('tool-trim', newTool === 'trim');
+  document.getElementById('tool-options-segment').classList.toggle('visible', newTool === 'segment');
+  dom.viewerStage.classList.toggle('tool-segment', newTool === 'segment');
   clearViewerRect();
 
-  // Auto-switch to viewer mode if an image is selected
-  if (newTool === 'trim' && !isViewerOpen() && state.selectedImage) {
+  if (newTool === 'segment') {
+    activateSegTool();
+  } else {
+    deactivateSegTool();
+  }
+
+  if (newTool && !isViewerOpen() && state.selectedImage) {
     enterViewerMode(state.selectedImage);
-  } else if (newTool === 'trim' && !state.selectedImage) {
+  } else if (newTool && !state.selectedImage) {
     setStatus('Select an image first, then pick a tool.');
   }
 }
 
-function setTrimBg(color) {
-  previewTool.bgColor = color;
-  document.getElementById('bg-white').classList.toggle('active', color === 'white');
-  document.getElementById('bg-black').classList.toggle('active', color === 'black');
-}
+// --- Viewer rectangle (reused for segment bounding box) ---
 
 function clearViewerRect() {
   previewTool.drawing = false;
   previewTool.rectDisplay = null;
   const overlay = document.getElementById('viewer-rect-overlay');
-  const actions = document.getElementById('viewer-rect-actions');
   if (overlay) overlay.classList.add('hidden');
-  if (actions) actions.classList.add('hidden');
 }
 
-// Returns the displayed image's bounding rect relative to #viewer-stage.
-// The <img> uses object-fit: contain, so we have to compute the visible area.
 function getDisplayedImageRect() {
   const img = dom.viewerImage;
   const stage = dom.viewerStage;
@@ -2211,9 +2244,117 @@ function getDisplayedImageRect() {
   return { left: offsetX, top: offsetY, width: drawW, height: drawH, natW, natH };
 }
 
+function updateRectBox(box, r) {
+  box.style.left = `${r.x}px`;
+  box.style.top = `${r.y}px`;
+  box.style.width = `${r.w}px`;
+  box.style.height = `${r.h}px`;
+}
+
+// --- Segment tool: activation / state ---
+
+function activateSegTool() {
+  clearSegState();
+  segTool.mode = 'box';
+
+  const container = document.getElementById('seg-canvas-container');
+  container.classList.remove('hidden');
+  container.classList.add('active');
+
+  initSegCanvases();
+  updateSegModeButtons();
+  updateSegStatus('Draw a rectangle around the tablet to begin.');
+  updateSegActionButtons();
+
+  startSegServerIfNeeded();
+}
+
+function deactivateSegTool() {
+  clearSegState();
+  const container = document.getElementById('seg-canvas-container');
+  container.classList.add('hidden');
+  container.classList.remove('active');
+  clearSegCanvases();
+}
+
+function clearSegState() {
+  segTool.box = null;
+  segTool.positivePoints = [];
+  segTool.negativePoints = [];
+  segTool.currentMaskBase64 = null;
+  segTool.imageEncoded = false;
+  segTool.encodedImagePath = null;
+  segTool.imageWidth = 0;
+  segTool.imageHeight = 0;
+  clearViewerRect();
+  clearSegCanvases();
+  updateSegActionButtons();
+}
+
+function initSegCanvases() {
+  segTool.maskCanvas = document.getElementById('seg-canvas-mask');
+  segTool.interCanvas = document.getElementById('seg-canvas-interaction');
+  segTool.maskCtx = segTool.maskCanvas.getContext('2d');
+  segTool.interCtx = segTool.interCanvas.getContext('2d');
+  resizeSegCanvases();
+}
+
+function resizeSegCanvases() {
+  const disp = getDisplayedImageRect();
+  if (!disp) return;
+
+  for (const canvas of [segTool.maskCanvas, segTool.interCanvas]) {
+    if (!canvas) continue;
+    canvas.width = disp.width;
+    canvas.height = disp.height;
+    canvas.style.left = `${disp.left}px`;
+    canvas.style.top = `${disp.top}px`;
+    canvas.style.width = `${disp.width}px`;
+    canvas.style.height = `${disp.height}px`;
+  }
+
+  renderSegPoints();
+}
+
+function clearSegCanvases() {
+  if (segTool.maskCtx && segTool.maskCanvas) {
+    segTool.maskCtx.clearRect(0, 0, segTool.maskCanvas.width, segTool.maskCanvas.height);
+  }
+  if (segTool.interCtx && segTool.interCanvas) {
+    segTool.interCtx.clearRect(0, 0, segTool.interCanvas.width, segTool.interCanvas.height);
+  }
+}
+
+// --- Coordinate conversion ---
+
+function stageToCanvasCoords(stageX, stageY) {
+  const disp = getDisplayedImageRect();
+  if (!disp) return null;
+  const cx = stageX - disp.left;
+  const cy = stageY - disp.top;
+  return {
+    x: Math.max(0, Math.min(disp.width, cx)),
+    y: Math.max(0, Math.min(disp.height, cy)),
+  };
+}
+
+function canvasToImageCoords(canvasX, canvasY) {
+  const disp = getDisplayedImageRect();
+  if (!disp) return null;
+  // Use the actual original image dimensions (from SAM encode) if available,
+  // not the display-resolution natW/natH which may be a scaled-down preview.
+  const targetW = segTool.imageWidth || disp.natW;
+  const targetH = segTool.imageHeight || disp.natH;
+  return {
+    x: Math.round((canvasX / disp.width) * targetW),
+    y: Math.round((canvasY / disp.height) * targetH),
+  };
+}
+
+// --- Mouse handlers ---
+
 function onViewerMouseDown(e) {
-  if (previewTool.active !== 'trim' || previewTool.busy) return;
-  if (e.button !== 0) return;
+  if (previewTool.active !== 'segment' || previewTool.busy) return;
   if (!isViewerOpen()) return;
 
   const disp = getDisplayedImageRect();
@@ -2223,21 +2364,46 @@ function onViewerMouseDown(e) {
   const x = e.clientX - stageRect.left;
   const y = e.clientY - stageRect.top;
 
-  // Only start drawing if the mousedown happened on the image itself
+  // Only act if click is on the image
   if (x < disp.left || x > disp.left + disp.width ||
       y < disp.top || y > disp.top + disp.height) return;
 
-  e.preventDefault();
-  previewTool.drawing = true;
-  previewTool.startX = x;
-  previewTool.startY = y;
-  previewTool.rectDisplay = { x, y, w: 0, h: 0 };
+  if (segTool.mode === 'box') {
+    if (e.button !== 0) return;
+    e.preventDefault();
 
-  const overlay = document.getElementById('viewer-rect-overlay');
-  const box = document.getElementById('viewer-rect-box');
-  overlay.classList.remove('hidden');
-  document.getElementById('viewer-rect-actions').classList.add('hidden');
-  updateRectBox(box, previewTool.rectDisplay);
+    // Start drawing bounding box (uses existing rect overlay)
+    previewTool.drawing = true;
+    previewTool.startX = x;
+    previewTool.startY = y;
+    previewTool.rectDisplay = { x, y, w: 0, h: 0 };
+
+    const overlay = document.getElementById('viewer-rect-overlay');
+    const box = document.getElementById('viewer-rect-box');
+    overlay.classList.remove('hidden');
+    updateRectBox(box, previewTool.rectDisplay);
+
+  } else if (segTool.mode === 'add' || segTool.mode === 'remove') {
+    e.preventDefault();
+    const disp = getDisplayedImageRect();
+    if (!disp) return;
+
+    // Store as normalized (0..1) coordinates
+    const normPt = {
+      x: (x - disp.left) / disp.width,
+      y: (y - disp.top) / disp.height,
+    };
+
+    if (e.button === 2 || segTool.mode === 'remove') {
+      segTool.negativePoints.push(normPt);
+    } else {
+      segTool.positivePoints.push(normPt);
+    }
+
+    renderSegPoints();
+    updateSegActionButtons();
+    requestSegPrediction();
+  }
 }
 
 function onViewerMouseMove(e) {
@@ -2267,61 +2433,314 @@ function onViewerMouseUp() {
     clearViewerRect();
     return;
   }
-  const actions = document.getElementById('viewer-rect-actions');
-  actions.classList.remove('hidden');
-  positionRectActions(actions, r);
+
+  // Convert rect to image pixel coords and store as bounding box
+  const disp = getDisplayedImageRect();
+  if (!disp) return;
+
+  // Store box in normalized (0..1) coords so they work regardless of image resolution
+  segTool.box = {
+    x1: (r.x - disp.left) / disp.width,
+    y1: (r.y - disp.top) / disp.height,
+    x2: (r.x - disp.left + r.w) / disp.width,
+    y2: (r.y - disp.top + r.h) / disp.height,
+  };
+
+  // Switch to add mode after drawing box
+  setSegMode('add');
+  updateSegActionButtons();
+  updateSegStatus('Encoding image...');
+
+  // Trigger encode then predict
+  requestSegEncode().then(() => requestSegPrediction());
 }
 
-function updateRectBox(box, r) {
-  box.style.left = `${r.x}px`;
-  box.style.top = `${r.y}px`;
-  box.style.width = `${r.w}px`;
-  box.style.height = `${r.h}px`;
+function onSegContextMenu(e) {
+  if (previewTool.active !== 'segment') return;
+  if (segTool.mode === 'box') return;
+
+  e.preventDefault();
+  const stageRect = dom.viewerStage.getBoundingClientRect();
+  const x = e.clientX - stageRect.left;
+  const y = e.clientY - stageRect.top;
+  const disp = getDisplayedImageRect();
+  if (!disp) return;
+
+  segTool.negativePoints.push({
+    x: (x - disp.left) / disp.width,
+    y: (y - disp.top) / disp.height,
+  });
+  renderSegPoints();
+  updateSegActionButtons();
+  requestSegPrediction();
 }
 
-function positionRectActions(actions, r) {
-  actions.style.left = `${r.x}px`;
-  actions.style.top = `${r.y + r.h + 6}px`;
-}
+// --- Rendering ---
 
-// Convert displayed (CSS) pixels to normalized (0..1) image coordinates and apply.
-async function applyViewerRect() {
-  if (previewTool.busy || !viewerCurrentPath || !previewTool.rectDisplay) return;
+function renderSegPoints() {
+  const ctx = segTool.interCtx;
+  if (!ctx || !segTool.interCanvas) return;
+  const w = segTool.interCanvas.width;
+  const h = segTool.interCanvas.height;
+  ctx.clearRect(0, 0, w, h);
 
   const disp = getDisplayedImageRect();
   if (!disp) return;
 
-  const r = previewTool.rectDisplay;
-  const normRect = {
-    left: (r.x - disp.left) / disp.width,
-    top: (r.y - disp.top) / disp.height,
-    width: r.w / disp.width,
-    height: r.h / disp.height,
-  };
+  // Draw bounding box on interaction canvas (all coords are normalized 0..1)
+  if (segTool.box) {
+    const bx1 = segTool.box.x1 * w;
+    const by1 = segTool.box.y1 * h;
+    const bx2 = segTool.box.x2 * w;
+    const by2 = segTool.box.y2 * h;
 
-  previewTool.busy = true;
-  dom.viewerInfo.textContent = 'Trimming...';
-
-  const result = await window.api.trimInRect(viewerCurrentPath, normRect, previewTool.bgColor);
-  previewTool.busy = false;
-
-  if (!result || result.status !== 'ok') {
-    dom.viewerInfo.textContent = `Error: ${result?.error || 'trim failed'}`;
-    return;
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(bx1, by1, bx2 - bx1, by2 - by1);
+    ctx.setLineDash([]);
   }
 
-  if (result.thumbnail) {
-    const card = getCardForImage(viewerCurrentPath);
-    if (card) {
-      const imgEl = card.querySelector('img');
-      if (imgEl) imgEl.src = result.thumbnail;
+  // Positive points (green)
+  for (const pt of segTool.positivePoints) {
+    const cx = pt.x * w;
+    const cy = pt.y * h;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#f44336';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+function renderSegMask(maskPngBase64) {
+  if (!maskPngBase64 || !segTool.maskCtx || !segTool.maskCanvas) return;
+
+  // Ensure canvases are correctly sized/positioned for the current image
+  resizeSegCanvases();
+
+  const img = new Image();
+  img.onload = () => {
+    const ctx = segTool.maskCtx;
+    const w = segTool.maskCanvas.width;
+    const h = segTool.maskCanvas.height;
+
+    console.log('[seg] mask image:', img.naturalWidth, 'x', img.naturalHeight,
+                '→ canvas:', w, 'x', h,
+                'pos:', segTool.maskCanvas.style.left, segTool.maskCanvas.style.top);
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Draw mask scaled to canvas size
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = w;
+    tempCanvas.height = h;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(img, 0, 0, w, h);
+    const imageData = tempCtx.getImageData(0, 0, w, h);
+
+    // Convert grayscale mask to fuchsia overlay (like Photoshop quick mask)
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const val = data[i];
+      if (val > 128) {
+        data[i] = 255;      // R
+        data[i + 1] = 0;    // G
+        data[i + 2] = 128;  // B
+        data[i + 3] = 140;  // A
+      } else {
+        data[i + 3] = 0;    // transparent
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+  };
+  img.src = `data:image/png;base64,${maskPngBase64}`;
+}
+
+// --- UI controls ---
+
+function setSegMode(mode) {
+  segTool.mode = mode;
+  updateSegModeButtons();
+}
+
+function updateSegModeButtons() {
+  document.getElementById('seg-mode-box').classList.toggle('active', segTool.mode === 'box');
+  document.getElementById('seg-mode-add').classList.toggle('active', segTool.mode === 'add');
+  document.getElementById('seg-mode-remove').classList.toggle('active', segTool.mode === 'remove');
+}
+
+function setSegBg(color) {
+  segTool.bgColor = color;
+  document.getElementById('seg-bg-white').classList.toggle('active', color === 'white');
+  document.getElementById('seg-bg-black').classList.toggle('active', color === 'black');
+}
+
+function updateSegStatus(msg) {
+  const el = document.getElementById('seg-status');
+  if (el) el.textContent = msg;
+}
+
+function updateSegActionButtons() {
+  const hasPoints = segTool.positivePoints.length > 0 || segTool.negativePoints.length > 0;
+  const hasBox = !!segTool.box;
+  const hasMask = !!segTool.currentMaskBase64;
+  document.getElementById('seg-undo').disabled = !hasPoints;
+  document.getElementById('seg-clear').disabled = !hasBox && !hasPoints;
+  document.getElementById('seg-apply').disabled = !hasMask;
+}
+
+function segUndo() {
+  // Pop the most recently added point (from either list)
+  if (segTool.negativePoints.length > 0 &&
+      (segTool.positivePoints.length === 0 ||
+       segTool.negativePoints.length >= segTool.positivePoints.length)) {
+    segTool.negativePoints.pop();
+  } else if (segTool.positivePoints.length > 0) {
+    segTool.positivePoints.pop();
+  }
+  renderSegPoints();
+  updateSegActionButtons();
+  if (segTool.box) requestSegPrediction();
+}
+
+function segClear() {
+  clearSegState();
+  setSegMode('box');
+  updateSegStatus('Draw a rectangle around the tablet to begin.');
+}
+
+// --- Backend communication (stubs until Phase 2-3 wired) ---
+
+async function startSegServerIfNeeded() {
+  if (segTool.serverReady) return;
+  updateSegStatus('Starting segmentation server...');
+
+  try {
+    const result = await window.api.segStartServer();
+    if (result && result.success) {
+      segTool.serverReady = true;
+      updateSegStatus('Server ready. Draw a rectangle around the tablet.');
+    } else {
+      updateSegStatus(`Server error: ${result?.error || 'unknown'}`);
+    }
+  } catch (err) {
+    updateSegStatus(`Server not available: ${err.message}`);
+    segTool.serverReady = false;
+  }
+}
+
+async function requestSegEncode() {
+  if (!viewerCurrentPath) return;
+  if (segTool.encodedImagePath === viewerCurrentPath) return;
+
+  // Ensure server is running before making HTTP calls
+  if (!segTool.serverReady) {
+    updateSegStatus('Waiting for segmentation server...');
+    await startSegServerIfNeeded();
+    if (!segTool.serverReady) {
+      updateSegStatus('Server not available. Check Python installation.');
+      return;
     }
   }
 
-  setStatus(`Trimmed to ${result.newWidth}\u00D7${result.newHeight}. Original backed up to _Raw/.`);
+  previewTool.busy = true;
+  updateSegStatus('Encoding image (this takes a few seconds)...');
 
-  clearViewerRect();
-  await loadViewerImage(viewerCurrentPath);
+  try {
+    const result = await window.api.segEncodeImage(viewerCurrentPath);
+    if (result && result.status === 'ready') {
+      segTool.imageEncoded = true;
+      segTool.encodedImagePath = viewerCurrentPath;
+      segTool.imageWidth = result.width;
+      segTool.imageHeight = result.height;
+    } else {
+      updateSegStatus(`Encode failed: ${result?.error || 'unknown'}`);
+    }
+  } catch (err) {
+    updateSegStatus(`Encode error: ${err.message}`);
+  }
+
+  previewTool.busy = false;
+}
+
+async function requestSegPrediction() {
+  if (!segTool.imageEncoded) return;
+  if (!segTool.box && segTool.positivePoints.length === 0) return;
+
+  previewTool.busy = true;
+
+  try {
+    // Convert normalized (0..1) coords to image pixels for SAM
+    const iw = segTool.imageWidth;
+    const ih = segTool.imageHeight;
+    const pixelBox = segTool.box ? {
+      x1: Math.round(segTool.box.x1 * iw),
+      y1: Math.round(segTool.box.y1 * ih),
+      x2: Math.round(segTool.box.x2 * iw),
+      y2: Math.round(segTool.box.y2 * ih),
+    } : null;
+    const pixelPos = segTool.positivePoints.map(p => ({ x: Math.round(p.x * iw), y: Math.round(p.y * ih) }));
+    const pixelNeg = segTool.negativePoints.map(p => ({ x: Math.round(p.x * iw), y: Math.round(p.y * ih) }));
+
+    const result = await window.api.segPredictMask(
+      pixelBox,
+      pixelPos,
+      pixelNeg
+    );
+
+    if (result && result.mask) {
+      segTool.currentMaskBase64 = result.mask;
+      renderSegMask(result.mask);
+      const score = (result.score * 100).toFixed(1);
+      updateSegStatus(`Mask ready (score: ${score}%). Click to refine or Apply.`);
+      updateSegActionButtons();
+    } else {
+      updateSegStatus(`Prediction failed: ${result?.error || 'unknown'}`);
+    }
+  } catch (err) {
+    updateSegStatus(`Prediction error: ${err.message}`);
+  }
+
+  previewTool.busy = false;
+}
+
+async function applySegMask() {
+  if (!segTool.currentMaskBase64 || !viewerCurrentPath) return;
+
+  previewTool.busy = true;
+  updateSegStatus('Applying mask...');
+
+  try {
+    const result = await window.api.segApplyMask(
+      viewerCurrentPath,
+      null,  // main process computes _cleaned/ path
+      segTool.currentMaskBase64,
+      segTool.bgColor
+    );
+
+    if (result && result.status === 'ok') {
+      updateSegStatus(`Saved to _cleaned/. Mask saved as _mask.png.`);
+      setStatus('Segmentation applied successfully.');
+
+      if (result.thumbnail) {
+        const card = getCardForImage(viewerCurrentPath);
+        if (card) {
+          const imgEl = card.querySelector('img');
+          if (imgEl) imgEl.src = result.thumbnail;
+        }
+      }
+    } else {
+      updateSegStatus(`Apply error: ${result?.error || 'failed'}`);
+    }
+  } catch (err) {
+    updateSegStatus(`Apply error: ${err.message}`);
+  }
+
+  previewTool.busy = false;
 }
 
 // Update the Image Info section in the Tools tab
@@ -2355,14 +2774,29 @@ function updateToolInfo() {
 document.querySelectorAll('.tool-btn').forEach(btn => {
   btn.addEventListener('click', () => setActiveTool(btn.dataset.tool));
 });
-document.getElementById('bg-white').addEventListener('click', () => setTrimBg('white'));
-document.getElementById('bg-black').addEventListener('click', () => setTrimBg('black'));
-document.getElementById('viewer-rect-apply').addEventListener('click', applyViewerRect);
-document.getElementById('viewer-rect-cancel').addEventListener('click', clearViewerRect);
+
+// Segment tool controls
+document.getElementById('seg-mode-box').addEventListener('click', () => setSegMode('box'));
+document.getElementById('seg-mode-add').addEventListener('click', () => setSegMode('add'));
+document.getElementById('seg-mode-remove').addEventListener('click', () => setSegMode('remove'));
+document.getElementById('seg-bg-white').addEventListener('click', () => setSegBg('white'));
+document.getElementById('seg-bg-black').addEventListener('click', () => setSegBg('black'));
+document.getElementById('seg-undo').addEventListener('click', segUndo);
+document.getElementById('seg-clear').addEventListener('click', segClear);
+document.getElementById('seg-apply').addEventListener('click', applySegMask);
+document.getElementById('seg-opacity').addEventListener('input', (e) => {
+  segTool.maskOpacity = e.target.value / 100;
+  if (segTool.maskCanvas) segTool.maskCanvas.style.opacity = segTool.maskOpacity;
+  document.getElementById('seg-opacity-value').textContent = `${e.target.value}%`;
+});
 
 dom.viewerStage.addEventListener('mousedown', onViewerMouseDown);
+dom.viewerStage.addEventListener('contextmenu', onSegContextMenu);
 window.addEventListener('mousemove', onViewerMouseMove);
 window.addEventListener('mouseup', onViewerMouseUp);
 
-// Drop any drawn rectangle on window resize (display coords become stale)
-window.addEventListener('resize', clearViewerRect);
+// Resize: reposition canvases and drop stale rect
+window.addEventListener('resize', () => {
+  clearViewerRect();
+  if (previewTool.active === 'segment') resizeSegCanvases();
+});

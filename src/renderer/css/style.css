@@ -1437,7 +1437,7 @@ main {
   overflow: hidden;
 }
 
-#viewer-stage.tool-trim {
+#viewer-stage.tool-segment {
   cursor: crosshair;
 }
 
@@ -1491,51 +1491,43 @@ main {
 
 #viewer-rect-box {
   position: absolute;
-  border: 2px dashed #5b9bd5;
-  background: rgba(91, 155, 213, 0.12);
+  border: 2px dashed #ccc;
+  background: transparent;
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
   box-sizing: border-box;
 }
 
-#viewer-rect-actions {
+/* Segmentation canvas overlay */
+#seg-canvas-container {
   position: absolute;
-  display: flex;
-  gap: 6px;
-  pointer-events: auto;
-  background: rgba(30, 30, 46, 0.95);
-  padding: 4px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  z-index: 6;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
 }
 
-#viewer-rect-actions.hidden {
+#seg-canvas-container.active {
+  pointer-events: auto;
+}
+
+#seg-canvas-container.hidden {
   display: none;
 }
 
-.rect-btn {
-  padding: 5px 12px;
-  border: 1px solid var(--border);
-  background: var(--bg-light);
-  color: var(--text);
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 12px;
+#seg-canvas-mask,
+#seg-canvas-interaction {
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 
-.rect-btn:hover {
-  background: var(--bg);
+#seg-canvas-mask {
+  z-index: 1;
+  opacity: 0.5;
 }
 
-.rect-btn-apply {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-  font-weight: 600;
-}
-
-.rect-btn-apply:hover {
-  background: var(--accent-hover);
+#seg-canvas-interaction {
+  z-index: 2;
+  cursor: crosshair;
 }
 
 /* === Tools Tab === */
@@ -1649,12 +1641,86 @@ main {
   font-size: 10px;
 }
 
-#tool-options-trim {
+#tool-options-segment {
   display: none;
 }
 
-#tool-options-trim.visible {
+#tool-options-segment.visible {
   display: block;
+}
+
+.seg-mode-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-light);
+  color: var(--text);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.seg-mode-btn:hover {
+  background: var(--bg);
+  border-color: var(--text-dim);
+}
+
+.seg-mode-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.seg-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.seg-action-btn {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-light);
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.seg-action-btn:hover:not(:disabled) {
+  background: var(--bg);
+  border-color: var(--text-dim);
+}
+
+.seg-action-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.seg-action-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.seg-action-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+#seg-opacity {
+  width: 80px;
+  accent-color: var(--accent);
+}
+
+#seg-opacity-value {
+  color: var(--text-dim);
+  font-size: 11px;
+  min-width: 28px;
+}
+
+#seg-status {
+  margin-top: 8px;
 }
 
 #tool-info {

@@ -10,6 +10,7 @@ const {
   runStitcherHeadless,
 } = require('./stitcher-bridge');
 const projectManager = require('./project-manager');
+const segBridge = require('./segmentation-bridge');
 
 // Hot reload in dev mode — watches renderer files (HTML, CSS, JS)
 try {
@@ -372,120 +373,105 @@ ipcMain.handle('get-full-image', async (event, imagePath) => {
   }
 });
 
-// === Trim to Object (user-drawn rectangle) ===
-// The renderer sends normalized coordinates (0..1) of a rectangle drawn on the
-// post-EXIF-rotation image. This handler extracts that region, runs sharp.trim
-// to find the tight edges of the tablet *within* the rectangle, adds 20px padding
-// (clamped to image bounds), flattens against the chosen bg, backs up the original
-// to _Raw/, and overwrites the file.
-ipcMain.handle('trim-in-rect', async (event, imagePath, normRect, bgColor) => {
+// === Segmentation Bridge ===
+
+ipcMain.handle('seg-start-server', async () => {
+  return segBridge.startServer((progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('seg-progress', progress);
+    }
+  });
+});
+
+ipcMain.handle('seg-stop-server', async () => {
+  segBridge.stopServer();
+  return { success: true };
+});
+
+ipcMain.handle('seg-encode-image', async (event, imagePath) => {
+  return segBridge.encodeImage(imagePath);
+});
+
+ipcMain.handle('seg-predict-mask', async (event, box, positivePoints, negativePoints) => {
+  return segBridge.predictMask(box, positivePoints, negativePoints);
+});
+
+ipcMain.handle('seg-apply-mask', async (event, imagePath, outputPath, maskBase64, bgColor) => {
+  // Apply mask using Sharp (local, no HTTP to Python needed)
   const sharp = require('sharp');
-  const PAD = 20;
-  const TRIM_THRESHOLD = 10;
 
   try {
-    // Get post-EXIF-rotation dimensions. Sharp's metadata() returns the raw
-    // file dimensions; for orientations 5..8 the visual width/height are swapped.
-    const meta = await sharp(imagePath, { limitInputPixels: false }).metadata();
-    const orient = meta.orientation || 1;
-    let origW, origH;
-    if (orient >= 5 && orient <= 8) {
-      origW = meta.height;
-      origH = meta.width;
-    } else {
-      origW = meta.width;
-      origH = meta.height;
+    // Compute output path: {tabletFolder}/_cleaned/{stem}.tif
+    if (!outputPath) {
+      const folder = path.dirname(imagePath);
+      const cleanedDir = path.join(folder, '_cleaned');
+      if (!fs.existsSync(cleanedDir)) fs.mkdirSync(cleanedDir, { recursive: true });
+      outputPath = path.join(cleanedDir, path.parse(imagePath).name + '.tif');
     }
 
-    // Convert normalized rect to pixel coordinates
-    const urLeft = Math.max(0, Math.round(normRect.left * origW));
-    const urTop = Math.max(0, Math.round(normRect.top * origH));
-    const urRight = Math.min(origW, Math.round((normRect.left + normRect.width) * origW));
-    const urBottom = Math.min(origH, Math.round((normRect.top + normRect.height) * origH));
-    const urW = urRight - urLeft;
-    const urH = urBottom - urTop;
+    // Decode the base64 mask PNG
+    const maskBuf = Buffer.from(maskBase64, 'base64');
 
-    if (urW < 10 || urH < 10) {
-      return { status: 'error', error: 'Rectangle too small' };
-    }
-
-    // Step 1: extract the user region into memory
-    const regionBuf = await sharp(imagePath, { limitInputPixels: false })
+    // Load and auto-rotate the original image to a buffer
+    const rotatedBuf = await sharp(imagePath, { limitInputPixels: false })
       .rotate()
-      .extract({ left: urLeft, top: urTop, width: urW, height: urH })
+      .removeAlpha()
       .toBuffer();
 
-    // Step 2: trim the extracted region to find the tablet edges
-    let tightLeftInRegion = 0;
-    let tightTopInRegion = 0;
-    let tightW = urW;
-    let tightH = urH;
-    try {
-      const trimmed = await sharp(regionBuf)
-        .trim({ threshold: TRIM_THRESHOLD })
-        .toBuffer({ resolveWithObject: true });
-      tightLeftInRegion = -(trimmed.info.trimOffsetLeft || 0);
-      tightTopInRegion = -(trimmed.info.trimOffsetTop || 0);
-      tightW = trimmed.info.width;
-      tightH = trimmed.info.height;
-    } catch (trimErr) {
-      // Uniform region — fall back to using the user rect as-is
-      console.warn('Trim fallback (uniform region):', trimErr.message);
-    }
+    // Get the actual post-rotation dimensions
+    const rotatedMeta = await sharp(rotatedBuf).metadata();
+    const imgW = rotatedMeta.width;
+    const imgH = rotatedMeta.height;
 
-    // Step 3: translate back to original-image coordinates and add padding
-    const tightLeft = urLeft + tightLeftInRegion;
-    const tightTop = urTop + tightTopInRegion;
+    // Resize mask to match the actual image dimensions
+    const maskResized = await sharp(maskBuf)
+      .resize(imgW, imgH, { fit: 'fill', kernel: 'nearest' })
+      .ensureAlpha()
+      .toBuffer();
 
-    const padLeft = Math.max(0, tightLeft - PAD);
-    const padTop = Math.max(0, tightTop - PAD);
-    const padRight = Math.min(origW, tightLeft + tightW + PAD);
-    const padBottom = Math.min(origH, tightTop + tightH + PAD);
-
-    const finalBox = {
-      left: padLeft,
-      top: padTop,
-      width: padRight - padLeft,
-      height: padBottom - padTop,
-    };
-
-    // Step 4: backup original to _Raw/
-    const folder = path.dirname(imagePath);
-    const filename = path.basename(imagePath);
-    const subfolderName = path.basename(folder);
-    const rootFolder = path.dirname(folder);
-    const archiveDir = path.join(rootFolder, '_Raw', subfolderName);
-    const archivePath = path.join(archiveDir, filename);
-    if (!fs.existsSync(archivePath)) {
-      fs.mkdirSync(archiveDir, { recursive: true });
-      fs.copyFileSync(imagePath, archivePath);
-    }
-
-    // Step 5: extract, flatten, overwrite
     const bg = bgColor === 'black'
-      ? { r: 0, g: 0, b: 0, alpha: 1 }
-      : { r: 255, g: 255, b: 255, alpha: 1 };
+      ? { r: 0, g: 0, b: 0, alpha: 255 }
+      : { r: 255, g: 255, b: 255, alpha: 255 };
 
-    const outBuf = await sharp(imagePath, { limitInputPixels: false })
-      .rotate()
-      .extract(finalBox)
-      .flatten({ background: bg })
-      .jpeg({ quality: 95 })
+    // Composite: solid background + image + mask-as-alpha, then flatten
+    const result = await sharp({
+      create: { width: imgW, height: imgH, channels: 4, background: bg },
+    })
+      .composite([
+        { input: rotatedBuf, blend: 'over' },
+        { input: maskResized, blend: 'dest-in' },
+      ])
+      .flatten({ background: { r: bg.r, g: bg.g, b: bg.b } })
+      .tiff({ compression: 'lzw' })
       .toBuffer();
 
-    fs.writeFileSync(imagePath, outBuf);
+    fs.writeFileSync(outputPath, result);
 
+    // Save the mask alongside the original
+    const maskPath = path.join(path.dirname(imagePath), path.parse(imagePath).name + '_mask.png');
+    fs.writeFileSync(maskPath, maskBuf);
+
+    // Generate thumbnail for the UI
     const thumb = await generateThumbnail(imagePath);
+
     return {
       status: 'ok',
+      output_path: outputPath,
+      mask_path: maskPath,
       thumbnail: thumb,
-      finalBox,
-      newWidth: finalBox.width,
-      newHeight: finalBox.height,
     };
   } catch (err) {
-    console.error('trim-in-rect error:', err.message);
+    console.error('seg-apply-mask error:', err);
     return { status: 'error', error: err.message };
   }
+});
+
+ipcMain.handle('seg-server-status', async () => {
+  return { ready: segBridge.isServerReady() };
+});
+
+// Clean up Python process on quit
+app.on('before-quit', () => {
+  segBridge.stopServer();
 });
 

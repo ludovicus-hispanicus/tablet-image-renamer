@@ -9,6 +9,7 @@ const {
   autoDetectStitcherExe,
   runStitcherHeadless,
 } = require('./stitcher-bridge');
+const projectManager = require('./project-manager');
 
 // Hot reload in dev mode — watches renderer files (HTML, CSS, JS)
 try {
@@ -151,6 +152,18 @@ ipcMain.handle('process-tablets', async (event, rootFolder, tablets) => {
   });
 });
 
+ipcMain.handle('delete-image', async (event, imagePath) => {
+  try {
+    // Move to OS trash instead of permanent delete
+    const { shell } = require('electron');
+    await shell.trashItem(imagePath);
+    return { success: true };
+  } catch (err) {
+    console.error('Delete error:', err.message);
+    return { success: false, error: err.message };
+  }
+});
+
 // === Picker Mode ===
 
 const PICKS_FILE = 'picks.json';
@@ -177,10 +190,20 @@ ipcMain.handle('save-picks', async (event, subfolderPath, picks) => {
   }
 });
 
-ipcMain.handle('export-selected', async (event, rootFolder, subfolderName, picks) => {
+ipcMain.handle('select-export-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Select Export Folder',
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('export-selected', async (event, rootFolder, subfolderName, picks, customExportFolder) => {
   // picks is { imagePath: viewCode }
-  // Copy each picked image to _Selected/{subfolderName}/{name}_{viewCode}.ext
-  const selectedDir = path.join(rootFolder, SELECTED_FOLDER, subfolderName);
+  // Copy each picked image to exportFolder/{subfolderName}/{name}_{viewCode}.ext
+  const baseDir = customExportFolder || path.join(rootFolder, SELECTED_FOLDER);
+  const selectedDir = path.join(baseDir, subfolderName);
   try {
     fs.mkdirSync(selectedDir, { recursive: true });
 
@@ -239,6 +262,59 @@ ipcMain.handle('clean-tablet-cache', async (event, rootFolder, tabletNames) => {
   }
   console.log(`Cleaned ${cleaned.length} cached files from ${folders.length} folder(s).`);
   return cleaned.length;
+});
+
+ipcMain.handle('scan-selected-folder', async (event, folderPath) => {
+  // Scan a folder for subfolders containing images (the export/selected folder)
+  if (!folderPath || !fs.existsSync(folderPath)) return [];
+  const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+  const results = [];
+  const imageExts = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.cr3', '.nef', '.arw']);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const subPath = path.join(folderPath, entry.name);
+    const files = fs.readdirSync(subPath);
+    const imageFiles = files.filter(f => imageExts.has(path.extname(f).toLowerCase()));
+    if (imageFiles.length > 0) {
+      results.push({ name: entry.name, path: subPath, imageCount: imageFiles.length });
+    }
+  }
+  results.sort((a, b) => a.name.localeCompare(b.name));
+  return results;
+});
+
+// === Project Management ===
+
+ipcMain.handle('list-projects', async () => {
+  const config = loadStitcherConfig();
+  return projectManager.listProjects(config.stitcherExe);
+});
+
+ipcMain.handle('get-project', async (event, name) => {
+  const config = loadStitcherConfig();
+  return projectManager.getProjectByName(name, config.stitcherExe);
+});
+
+ipcMain.handle('save-project', async (event, project) => {
+  return projectManager.saveUserProject(project);
+});
+
+ipcMain.handle('delete-project', async (event, name) => {
+  return projectManager.deleteUserProject(name);
+});
+
+ipcMain.handle('new-project', async (event, name) => {
+  return projectManager.defaultNewProject(name);
+});
+
+ipcMain.handle('select-measurements-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    title: 'Select Measurements File',
+    filters: [{ name: 'Measurements', extensions: ['xlsx', 'xls', 'json'] }],
+  });
+  if (result.canceled) return null;
+  return result.filePaths[0];
 });
 
 ipcMain.handle('scan-results', async (event, rootFolder) => {
@@ -412,3 +488,4 @@ ipcMain.handle('trim-in-rect', async (event, imagePath, normRect, bgColor) => {
     return { status: 'error', error: err.message };
   }
 });
+

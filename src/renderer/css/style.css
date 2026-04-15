@@ -164,8 +164,7 @@ body {
 
 #subfolder-info {
   font-weight: 600;
-  min-width: 120px;
-  text-align: center;
+  margin-left: 8px;
 }
 
 #combo-indicator {
@@ -250,6 +249,13 @@ main {
   font-size: 10px;
   font-weight: normal;
   margin-left: 4px;
+}
+
+.tree-empty {
+  padding: 12px 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
 }
 
 /* === Left Panel: Thumbnails === */
@@ -855,6 +861,58 @@ main {
   color: #f44336;
 }
 
+.settings-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+
+.settings-row select {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.settings-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-row textarea {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.settings-row textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#setting-clear-measurements {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
+}
+
+#setting-clear-measurements:hover {
+  color: #f44336;
+}
+
 .settings-footer {
   display: flex;
   justify-content: flex-end;
@@ -1350,6 +1408,25 @@ main {
   background: var(--accent);
 }
 
+#viewer-delete {
+  margin-left: 8px;
+}
+
+#viewer-delete:hover {
+  background: #f44336 !important;
+}
+
+#viewer-pick {
+  font-size: 13px;
+  padding: 2px 10px;
+  margin-left: 8px;
+}
+
+.viewer-pick-active {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+
 #viewer-stage {
   position: relative;
   flex: 1;
@@ -1688,6 +1765,49 @@ main {
   color: #f44336;
 }
 
+#picker-export-folder {
+  flex-shrink: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+#picker-export-folder label {
+  color: #aaa;
+  display: block;
+  margin-bottom: 4px;
+}
+
+#picker-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#picker-folder-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+#btn-browse-export {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  color: #fff;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#btn-browse-export:hover {
+  background: var(--accent);
+}
+
 #picker-actions {
   flex-shrink: 0;
   padding-top: 10px;
@@ -1723,3 +1843,4 @@ body.picker-mode #picker-panel { display: flex; }
 
 /* Hide picker panel in renamer mode (default) */
 body:not(.picker-mode) #picker-panel { display: none; }
+

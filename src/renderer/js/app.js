@@ -1,5 +1,6 @@
 // === State ===
-let appMode = 'renamer'; // 'renamer' or 'picker'
+let appMode = 'picker'; // 'picker' or 'renamer'
+let customExportFolder = null; // null = use _Selected in root
 
 const state = {
   rootFolder: null,
@@ -66,6 +67,13 @@ dom.btnReset.addEventListener('click', onReset);
 document.getElementById('btn-mode-renamer').addEventListener('click', () => switchMode('renamer'));
 document.getElementById('btn-mode-picker').addEventListener('click', () => switchMode('picker'));
 document.getElementById('btn-export-selected').addEventListener('click', onExportSelected);
+document.getElementById('btn-browse-export').addEventListener('click', async () => {
+  const folder = await window.api.selectExportFolder();
+  if (folder) {
+    customExportFolder = folder;
+    updateExportFolderDisplay();
+  }
+});
 document.getElementById('btn-process').addEventListener('click', onProcessReady);
 
 // Viewer mode controls
@@ -78,6 +86,11 @@ document.getElementById('viewer-reveal').addEventListener('click', () => {
 document.getElementById('viewer-rot-ccw').addEventListener('click', () => viewerRotate(-90));
 document.getElementById('viewer-rot-180').addEventListener('click', () => viewerRotate(180));
 document.getElementById('viewer-rot-cw').addEventListener('click', () => viewerRotate(90));
+document.getElementById('viewer-pick').addEventListener('click', () => {
+  togglePick();
+  updateViewerPickButton();
+});
+document.getElementById('viewer-delete').addEventListener('click', deleteCurrentImage);
 
 // Sidebar rotation controls (still work, use selection)
 document.getElementById('btn-rot-ccw').addEventListener('click', () => rotateSelected(-90));
@@ -182,6 +195,13 @@ document.getElementById('btn-settings').addEventListener('click', openSettings);
 document.getElementById('settings-close').addEventListener('click', closeSettings);
 document.getElementById('settings-save').addEventListener('click', saveSettings);
 document.getElementById('setting-browse-stitcher').addEventListener('click', browseStitcherExe);
+document.getElementById('setting-browse-measurements').addEventListener('click', async () => {
+  const path = await window.api.selectMeasurementsFile();
+  if (path) document.getElementById('setting-measurements').value = path;
+});
+document.getElementById('setting-clear-measurements').addEventListener('click', () => {
+  document.getElementById('setting-measurements').value = '';
+});
 document.getElementById('settings-overlay').addEventListener('click', (e) => {
   if (e.target.id === 'settings-overlay') closeSettings();
 });
@@ -238,11 +258,16 @@ async function openFolder(folder) {
   state.currentIndex = 0;
 
   // Load statuses early so tree icons show immediately
-  resultsState.reviewStatus = await window.api.loadReviewStatus(folder);
+  resultsState.reviewStatus = await window.api.loadReviewStatus(getResultsRoot());
 
   buildTreeView();
   loadResults();
-  loadCurrentSubfolder();
+  if (appMode === 'picker') {
+    loadCurrentSubfolder();
+  } else {
+    dom.thumbGrid.innerHTML = '';
+    dom.subfolderInfo.textContent = '';
+  }
   updateTreeStatusIcons();
 }
 
@@ -256,8 +281,17 @@ async function openFolder(folder) {
 
 // === Tree View ===
 function buildTreeView() {
+  if (appMode === 'renamer') {
+    buildSelectedTree();
+    return;
+  }
+  buildSourceTree();
+}
+
+function buildSourceTree() {
   const treeList = document.getElementById('tree-list');
   treeList.innerHTML = '';
+  document.getElementById('tree-header').textContent = 'Folders';
 
   state.subfolders.forEach((sub, idx) => {
     const item = document.createElement('div');
@@ -273,6 +307,7 @@ function buildTreeView() {
 }
 
 function updateTreeActive() {
+  if (appMode === 'renamer') return; // don't highlight in selected tree
   document.querySelectorAll('.tree-item').forEach(item => {
     item.classList.toggle('active', parseInt(item.dataset.index) === state.currentIndex);
   });
@@ -283,6 +318,12 @@ function updateTreeActive() {
 
 // === Subfolder Navigation ===
 function navigateSubfolder(direction) {
+  if (appMode === 'renamer' && selectedTreeFolders.length > 0) {
+    const newIndex = selectedTreeIndex + direction;
+    if (newIndex < 0 || newIndex >= selectedTreeFolders.length) return;
+    loadSelectedFolder(newIndex);
+    return;
+  }
   const newIndex = state.currentIndex + direction;
   if (newIndex < 0 || newIndex >= state.subfolders.length) return;
   state.currentIndex = newIndex;
@@ -337,10 +378,14 @@ async function loadCurrentSubfolder() {
     if (savedPicks && Object.keys(savedPicks).length > 0) {
       for (const [filename, viewCode] of Object.entries(savedPicks)) {
         const img = state.images.find(i => i.name === filename);
-        if (img && !state.reverseAssignments[viewCode]) {
+        if (img && (viewCode === 'pick' || !state.reverseAssignments[viewCode])) {
           state.assignments[img.path] = viewCode;
-          state.reverseAssignments[viewCode] = img.path;
+          if (viewCode !== 'pick') state.reverseAssignments[viewCode] = img.path;
         }
+      }
+      // Update card badges for all loaded picks
+      for (const imgPath of Object.keys(state.assignments)) {
+        updateCardBadge(imgPath);
       }
     }
   }
@@ -604,7 +649,71 @@ function togglePick() {
   updateButtons();
   updateStatusCount();
   savePicksDebounced();
-  autoAdvanceSelection();
+  updateViewerPickButton();
+  if (isViewerOpen()) {
+    viewerNavigate(1);
+  } else {
+    autoAdvanceSelection();
+  }
+}
+
+function updateViewerPickButton() {
+  const btn = document.getElementById('viewer-pick');
+  if (!btn) return;
+  const isPicked = !!state.assignments[viewerCurrentPath || state.selectedImage];
+  btn.textContent = isPicked ? '\u2715' : '\u2713';
+  btn.classList.toggle('viewer-pick-active', isPicked);
+  btn.style.display = appMode === 'picker' ? '' : 'none';
+
+  // Show/hide delete button based on mode
+  const delBtn = document.getElementById('viewer-delete');
+  if (delBtn) delBtn.style.display = appMode === 'renamer' ? '' : 'none';
+}
+
+async function deleteCurrentImage() {
+  if (appMode !== 'renamer') return;
+  const target = viewerCurrentPath || state.selectedImage;
+  if (!target) return;
+
+  const name = state.images.find(i => i.path === target)?.name || target;
+  if (!confirm(`Remove "${name}" from this tablet?\n\nThe file will be moved to the Recycle Bin.`)) return;
+
+  const result = await window.api.deleteImage(target);
+  if (!result.success) {
+    alert(`Failed to remove: ${result.error}`);
+    return;
+  }
+
+  // Remove from state
+  delete state.assignments[target];
+  const revKey = Object.entries(state.reverseAssignments).find(([, v]) => v === target)?.[0];
+  if (revKey) delete state.reverseAssignments[revKey];
+
+  const idx = state.images.findIndex(i => i.path === target);
+  state.images.splice(idx, 1);
+
+  // Remove thumbnail card
+  const card = dom.thumbGrid.querySelector(`.thumb-card[data-path="${CSS.escape(target)}"]`);
+  if (card) card.remove();
+
+  // Navigate to next image in viewer or exit
+  if (isViewerOpen()) {
+    if (state.images.length === 0) {
+      exitViewerMode();
+    } else {
+      const newIdx = Math.min(idx, state.images.length - 1);
+      const newPath = state.images[newIdx].path;
+      selectImage(newPath);
+      loadViewerImage(newPath);
+    }
+  } else if (state.images.length > 0) {
+    selectImage(state.images[Math.min(idx, state.images.length - 1)].path);
+  }
+
+  updateStructureDiagram();
+  updateButtons();
+  updateStatusCount();
+  setStatus(`Removed ${name}`);
 }
 
 function autoAdvanceSelection() {
@@ -626,6 +735,18 @@ function autoAdvanceSelection() {
 
 // === Keyboard ===
 function onKeyDown(e) {
+  // Ctrl shortcuts — always available
+  if (e.ctrlKey && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    onConfirm();
+    return;
+  }
+  if (e.ctrlKey && e.key.toLowerCase() === 'e') {
+    e.preventDefault();
+    onExportSelected();
+    return;
+  }
+
   // Close overlays on Escape
   if (e.key === 'Escape') {
     if (!document.getElementById('result-preview-overlay').classList.contains('hidden')) { closeResultPreview(); return; }
@@ -647,9 +768,27 @@ function onKeyDown(e) {
     return;
   }
 
-  // Viewer mode: arrow navigation, rotation, tool shortcuts
+  // Viewer mode: arrow navigation, rotation, tool shortcuts, assignments
   if (isViewerOpen()) {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    const vKey = e.key.toLowerCase();
+
+    // Handle pending combo in viewer
+    if (state.comboPending) {
+      if (COMBO_SECOND.has(vKey)) {
+        const combo = state.comboPending + vKey;
+        clearCombo();
+        if (VIEW_CODES[combo]) {
+          assignCurrentImage(combo);
+          viewerNavigate(1);
+        }
+        e.preventDefault();
+      } else {
+        clearCombo();
+      }
+      return;
+    }
+
     if (e.key === 'ArrowLeft' && e.shiftKey) {
       viewerRotate(-90); e.preventDefault();
     } else if (e.key === 'ArrowRight' && e.shiftKey) {
@@ -660,10 +799,28 @@ function onKeyDown(e) {
       viewerNavigate(-1); e.preventDefault();
     } else if (e.key === 'ArrowRight') {
       viewerNavigate(1); e.preventDefault();
-    } else if (e.key === 't' || e.key === 'T') {
+    } else if (vKey === 't' && !e.ctrlKey) {
       setActiveTool('trim'); e.preventDefault();
     } else if (e.key === 'Enter' && previewTool.rectDisplay && !previewTool.drawing) {
       applyViewerRect(); e.preventDefault();
+    } else if (vKey === 'p' && appMode === 'picker') {
+      togglePick(); e.preventDefault();
+    } else if (vKey === 'u') {
+      unassignCurrentImage(); e.preventDefault();
+    } else if (SHORTCUT_MAP[vKey] && !e.ctrlKey && !e.altKey) {
+      assignCurrentImage(SHORTCUT_MAP[vKey]);
+      viewerNavigate(1);
+      e.preventDefault();
+    } else if (COMBO_FIRST.has(vKey) && !e.ctrlKey && !e.altKey) {
+      state.comboPending = vKey;
+      dom.comboIndicator.textContent = `${vKey.toUpperCase()} + ?`;
+      dom.comboIndicator.classList.remove('hidden');
+      state.comboTimer = setTimeout(clearCombo, 800);
+      e.preventDefault();
+    } else if (e.key === 'Escape') {
+      exitViewerMode(); e.preventDefault();
+    } else if (e.key === 'Delete' && appMode === 'renamer') {
+      deleteCurrentImage(); e.preventDefault();
     }
     return;
   }
@@ -709,6 +866,9 @@ function onKeyDown(e) {
     e.preventDefault();
   } else if (key === 'u') {
     unassignCurrentImage();
+    e.preventDefault();
+  } else if (e.key === 'Delete' && appMode === 'renamer') {
+    deleteCurrentImage();
     e.preventDefault();
   } else if (e.key === 'ArrowLeft' && e.shiftKey) {
     rotateSelected(-90);
@@ -758,6 +918,7 @@ async function enterViewerMode(imagePath) {
   dom.viewerMode.classList.remove('hidden');
   await loadViewerImage(imagePath);
   updateToolInfo();
+  updateViewerPickButton();
 }
 
 function exitViewerMode() {
@@ -785,6 +946,7 @@ async function loadViewerImage(imagePath) {
     dom.viewerImage.src = dataUrl;
   }
   updateToolInfo();
+  updateViewerPickButton();
 }
 
 function viewerNavigate(direction) {
@@ -864,7 +1026,13 @@ async function onConfirm() {
     return;
   }
 
-  const sub = state.subfolders[state.currentIndex];
+  let sub;
+  if (appMode === 'renamer' && selectedTreeIndex >= 0) {
+    sub = selectedTreeFolders[selectedTreeIndex];
+  } else {
+    sub = state.subfolders[state.currentIndex];
+  }
+  if (!sub) return;
   const tabletId = sub.name;
   const normalizedId = tabletId.replace(/(\w+)\s+(\d+)/g, '$1.$2');
 
@@ -899,7 +1067,7 @@ async function onConfirm() {
   if (assignedLines.length > 0) {
     msg += `\nAssigned:\n${assignedLines.join('\n')}`;
   }
-  if (unassignedLines.length > 0) {
+  if (appMode !== 'renamer' && unassignedLines.length > 0) {
     msg += `\n\nUnassigned (${unassignedLines.length}):\n${unassignedLines.join('\n')}`;
   }
 
@@ -908,8 +1076,11 @@ async function onConfirm() {
 
   setStatus('Renaming...');
 
-  // Send assignments + all image paths (so unassigned get renamed too)
-  const allPaths = state.images.map(i => i.path);
+  // In renamer mode, only rename assigned files (leave others untouched)
+  // In picker mode, rename all (unassigned get _unassigned suffix)
+  const allPaths = appMode === 'renamer'
+    ? Object.keys(state.assignments)
+    : state.images.map(i => i.path);
   const results = await window.api.renameFiles(sub.path, state.assignments, tabletId, allPaths);
 
   const okCount = results.filter(r => r.status === 'ok' || r.status === 'skipped').length;
@@ -926,11 +1097,16 @@ async function onConfirm() {
   }
 
   // Re-scan and reload the current folder (stay here, don't auto-advance)
-  const scanResult = await window.api.scanFolder(state.rootFolder);
-  state.subfolders = scanResult.subfolders;
-  buildTreeView();
-  loadResults();
-  loadCurrentSubfolder();
+  if (appMode === 'renamer' && selectedTreeIndex >= 0) {
+    await buildSelectedTree();
+    await loadSelectedFolder(selectedTreeIndex);
+  } else {
+    const scanResult = await window.api.scanFolder(state.rootFolder);
+    state.subfolders = scanResult.subfolders;
+    buildTreeView();
+    loadResults();
+    loadCurrentSubfolder();
+  }
 }
 
 function onReset() {
@@ -1048,15 +1224,23 @@ const resultsState = {
 
 let activeTab = 'structure';
 
+function getResultsRoot() {
+  if (appMode === 'renamer') {
+    return customExportFolder || (state.rootFolder + '/_Selected');
+  }
+  return state.rootFolder;
+}
+
 async function loadResults() {
   if (!state.rootFolder) return;
 
-  const data = await window.api.scanResults(state.rootFolder);
+  const resultsRoot = getResultsRoot();
+  const data = await window.api.scanResults(resultsRoot);
   resultsState.results = data.results;
   resultsState.hasResults = data.hasResults;
 
   if (data.hasResults) {
-    resultsState.reviewStatus = await window.api.loadReviewStatus(state.rootFolder);
+    resultsState.reviewStatus = await window.api.loadReviewStatus(resultsRoot);
   }
 
   updateResultsTab();
@@ -1220,7 +1404,7 @@ async function setResultStatus(newStatus) {
     };
   }
 
-  await window.api.saveReviewStatus(state.rootFolder, resultsState.reviewStatus);
+  await window.api.saveReviewStatus(getResultsRoot(), resultsState.reviewStatus);
 
   const review = resultsState.reviewStatus[result.name];
   updateResultPreviewUI(review);
@@ -1293,14 +1477,15 @@ async function saveCurrentNotes() {
     }
   }
 
-  await window.api.saveReviewStatus(state.rootFolder, resultsState.reviewStatus);
+  await window.api.saveReviewStatus(getResultsRoot(), resultsState.reviewStatus);
   setStatus(`Notes saved for ${result.name}.`);
 }
 
 function updateTreeStatusIcons() {
+  if (appMode === 'picker') return;
   document.querySelectorAll('.tree-item').forEach(item => {
-    const idx = parseInt(item.dataset.index);
-    const sub = state.subfolders[idx];
+    const idx = parseInt(item.dataset.selectedIndex);
+    const sub = selectedTreeFolders[idx];
     if (!sub) return;
 
     const oldIcon = item.querySelector('.tree-status');
@@ -1363,7 +1548,7 @@ async function toggleTreeStatus(tabletName) {
     }
   }
 
-  await window.api.saveReviewStatus(state.rootFolder, resultsState.reviewStatus);
+  await window.api.saveReviewStatus(getResultsRoot(), resultsState.reviewStatus);
   updateTreeStatusIcons();
   updateResultSummary();
 
@@ -1382,6 +1567,8 @@ async function toggleTreeStatus(tabletName) {
 }
 
 // === Settings ===
+let currentProjectName = '';
+
 async function openSettings() {
   const config = await window.api.getStitcherConfig();
   let exePath = config.stitcherExe || '';
@@ -1402,7 +1589,52 @@ async function openSettings() {
     document.getElementById('setting-stitcher-status').textContent = 'Not configured — click Browse to locate eBL Photo Stitcher';
     document.getElementById('setting-stitcher-status').className = 'settings-hint';
   }
+
+  // Load projects
+  await loadProjectList(config.activeProject);
+
   document.getElementById('settings-overlay').classList.remove('hidden');
+}
+
+async function loadProjectList(selectName) {
+  const projects = await window.api.listProjects();
+  const select = document.getElementById('setting-project-select');
+  select.innerHTML = '';
+
+  for (const p of projects) {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = p.name + (p.builtin ? '' : ' (custom)');
+    select.appendChild(opt);
+  }
+
+  if (selectName && projects.some(p => p.name === selectName)) {
+    select.value = selectName;
+  } else if (projects.length > 0) {
+    select.value = projects[0].name;
+  }
+
+  await loadProjectFields(select.value);
+
+  select.addEventListener('change', async () => {
+    await loadProjectFields(select.value);
+  });
+}
+
+async function loadProjectFields(projectName) {
+  currentProjectName = projectName;
+  const project = await window.api.getProject(projectName);
+  if (!project) return;
+
+  document.getElementById('setting-photographer').value = project.photographer || '';
+  document.getElementById('setting-institution').value = project.institution || '';
+  document.getElementById('setting-measurements').value = project.measurements_file || '';
+  document.getElementById('setting-ruler-position').value = project.fixed_ruler_position || 'top';
+  document.getElementById('setting-credit').value = project.credit_line || '';
+
+  const bg = project.background_color || [0, 0, 0];
+  document.getElementById('setting-background').value =
+    (bg[0] > 128 && bg[1] > 128 && bg[2] > 128) ? 'white' : 'black';
 }
 
 function closeSettings() {
@@ -1430,10 +1662,37 @@ async function verifyStitcherUI(exePath) {
 }
 
 async function saveSettings() {
+  // Save stitcher config
   const config = {
     stitcherExe: document.getElementById('setting-stitcher-exe').value.trim(),
+    activeProject: document.getElementById('setting-project-select').value,
   };
   await window.api.saveStitcherConfig(config);
+
+  // Save project settings
+  if (currentProjectName) {
+    const bgValue = document.getElementById('setting-background').value;
+    const project = {
+      name: currentProjectName,
+      photographer: document.getElementById('setting-photographer').value.trim(),
+      institution: document.getElementById('setting-institution').value.trim(),
+      measurements_file: document.getElementById('setting-measurements').value.trim(),
+      fixed_ruler_position: document.getElementById('setting-ruler-position').value,
+      ruler_position_locked: true,
+      credit_line: document.getElementById('setting-credit').value.trim(),
+      background_color: bgValue === 'white' ? [255, 255, 255] : [0, 0, 0],
+    };
+
+    // Merge with existing project to preserve fields we don't edit here
+    const existing = await window.api.getProject(currentProjectName);
+    if (existing) {
+      Object.assign(existing, project);
+      await window.api.saveProject(existing);
+    } else {
+      await window.api.saveProject(project);
+    }
+  }
+
   setStatus('Settings saved.');
   closeSettings();
 }
@@ -1525,6 +1784,10 @@ async function runStitcher(tablets) {
     return;
   }
 
+  // In renamer mode, process from the Selected folder
+  const exportBase = customExportFolder || (state.rootFolder + '/_Selected');
+  const rootFolder = appMode === 'renamer' ? exportBase : state.rootFolder;
+
   isStitcherRunning = true;
   document.getElementById('btn-reprocess-updated').disabled = true;
   document.getElementById('btn-reprocess-all').disabled = true;
@@ -1536,17 +1799,19 @@ async function runStitcher(tablets) {
   setStatus('Stitcher running...');
 
   // Track which tablets were sent
-  const sentTablets = tablets || state.subfolders.map(s => s.name);
+  const sentTablets = tablets || (appMode === 'renamer'
+    ? selectedTreeFolders.map(f => f.name)
+    : state.subfolders.map(s => s.name));
 
   // Clean cached _object.tif and _ruler.tif files so the stitcher
   // re-extracts from the (possibly edited) source images
   statusEl.textContent += 'Cleaning cached files...\n';
-  const cleanedCount = await window.api.cleanTabletCache(state.rootFolder, tablets);
+  const cleanedCount = await window.api.cleanTabletCache(rootFolder, tablets);
   if (cleanedCount > 0) {
     statusEl.textContent += `Removed ${cleanedCount} cached file(s).\n`;
   }
 
-  const result = await window.api.processTablets(state.rootFolder, tablets);
+  const result = await window.api.processTablets(rootFolder, tablets);
 
   isStitcherRunning = false;
   document.getElementById('btn-reprocess-updated').disabled = false;
@@ -1561,7 +1826,7 @@ async function runStitcher(tablets) {
       reviewedAt: new Date().toISOString(),
     };
   }
-  await window.api.saveReviewStatus(state.rootFolder, resultsState.reviewStatus);
+  await window.api.saveReviewStatus(getResultsRoot(), resultsState.reviewStatus);
 
   if (result.success) {
     setStatus('Stitcher finished. Review the results.');
@@ -1604,10 +1869,123 @@ function switchMode(mode) {
 
   localStorage.setItem('appMode', mode);
 
-  // Reload current subfolder to apply mode-specific logic
-  if (state.subfolders.length > 0 && state.currentIndex >= 0) {
-    loadCurrentSubfolder();
+  // Toggle tree view
+  buildTreeView();
+  if (mode === 'picker') {
+    updateTreeActive();
+    updateTreeStatusIcons();
   }
+
+  // Reload current subfolder to apply mode-specific logic
+  if (mode === 'picker') {
+    if (state.subfolders.length > 0 && state.currentIndex >= 0) {
+      loadCurrentSubfolder();
+    }
+  } else {
+    // Renamer mode: clear thumbnails until user picks a selected folder
+    dom.thumbGrid.innerHTML = '';
+    dom.subfolderInfo.textContent = '';
+    state.images = [];
+    state.assignments = {};
+    state.reverseAssignments = {};
+    updateButtons();
+  }
+}
+
+let selectedTreeFolders = []; // cached selected folder scan results
+let selectedTreeIndex = -1; // current index in selected tree
+
+async function buildSelectedTree() {
+  const treeList = document.getElementById('tree-list');
+  treeList.innerHTML = '';
+  document.getElementById('tree-header').textContent = 'Selected';
+
+  const exportBase = customExportFolder || (state.rootFolder ? state.rootFolder + '/_Selected' : null);
+  if (!exportBase) {
+    treeList.innerHTML = '<div class="tree-empty">No export folder set</div>';
+    selectedTreeFolders = [];
+    return;
+  }
+
+  const folders = await window.api.scanSelectedFolder(exportBase);
+  selectedTreeFolders = folders;
+  if (folders.length === 0) {
+    treeList.innerHTML = '<div class="tree-empty">No exported tablets yet</div>';
+    return;
+  }
+
+  for (let i = 0; i < folders.length; i++) {
+    const folder = folders[i];
+    const item = document.createElement('div');
+    item.className = 'tree-item tree-selected-item';
+    item.dataset.selectedIndex = i;
+    item.innerHTML = `${folder.name}<span class="tree-count">(${folder.imageCount})</span>`;
+    item.addEventListener('click', () => {
+      loadSelectedFolder(i);
+    });
+    treeList.appendChild(item);
+  }
+
+  updateTreeStatusIcons();
+}
+
+async function loadSelectedFolder(index) {
+  const folder = selectedTreeFolders[index];
+  if (!folder) return;
+  selectedTreeIndex = index;
+
+  // Highlight active item
+  document.querySelectorAll('.tree-selected-item').forEach(el => {
+    el.classList.toggle('active', parseInt(el.dataset.selectedIndex) === index);
+  });
+
+  // Scan the export base to get proper image data for this subfolder
+  const exportBase = customExportFolder || (state.rootFolder + '/_Selected');
+  const result = await window.api.scanFolder(exportBase);
+  const sub = result.subfolders.find(s => s.name === folder.name);
+  if (!sub) {
+    setStatus(`Could not load ${folder.name}`);
+    return;
+  }
+
+  // Load into the main panel
+  state.images = sub.images;
+  state.selectedImage = null;
+  state.selectedImages.clear();
+  state.lastClickedIndex = -1;
+  state.assignments = {};
+  state.reverseAssignments = {};
+
+  dom.subfolderInfo.textContent = `${folder.name}  (${index + 1} / ${selectedTreeFolders.length})`;
+  dom.btnPrev.disabled = index === 0;
+  dom.btnNext.disabled = index >= selectedTreeFolders.length - 1;
+  dom.btnSkip.disabled = index >= selectedTreeFolders.length - 1;
+
+  // Auto-detect existing assignments from filenames (to show in structure diagram)
+  for (const img of state.images) {
+    if (img.detectedView && !state.reverseAssignments[img.detectedView]) {
+      state.assignments[img.path] = img.detectedView;
+      state.reverseAssignments[img.detectedView] = img.path;
+    }
+  }
+
+  // Render thumbnails
+  dom.thumbGrid.innerHTML = '';
+  setStatus(`Loading ${state.images.length} thumbnails...`);
+
+  for (const img of state.images) {
+    const card = createThumbCard(img);
+    dom.thumbGrid.appendChild(card);
+    loadThumbnail(img.path, card);
+  }
+
+  if (state.images.length > 0) {
+    selectImage(state.images[0].path);
+  }
+
+  updateStructureDiagram();
+  updateButtons();
+  updateStatusCount();
 }
 
 function updatePickerList() {
@@ -1682,10 +2060,30 @@ function savePicksDebounced() {
   }, 500);
 }
 
+function updateExportFolderDisplay() {
+  const el = document.getElementById('picker-folder-path');
+  if (customExportFolder) {
+    // Show just the folder name, not full path
+    const parts = customExportFolder.replace(/\\/g, '/').split('/');
+    el.textContent = parts[parts.length - 1] || customExportFolder;
+    el.title = customExportFolder;
+  } else {
+    el.textContent = '_Selected';
+    el.title = 'Default: _Selected folder in root';
+  }
+}
+
 async function onExportSelected() {
   const count = Object.keys(state.assignments).length;
   if (count === 0) {
     alert('No images have been picked.');
+    return;
+  }
+
+  // Determine export folder
+  const exportBase = customExportFolder || (state.rootFolder ? state.rootFolder + '/_Selected' : null);
+  if (!exportBase) {
+    alert('No export folder set. Use the browse button to select one.');
     return;
   }
 
@@ -1703,8 +2101,12 @@ async function onExportSelected() {
       return `  ${img?.name || '?'}  \u2192  ${tabletName}_${code}${ext}`;
     });
 
+  const folderLabel = customExportFolder
+    ? customExportFolder.replace(/\\/g, '/').split('/').pop()
+    : '_Selected';
+
   const ok = confirm(
-    `Export ${count} picked image(s) to _Selected/${tabletName}/ ?\n\n${lines.join('\n')}`
+    `Export ${count} picked image(s) to ${folderLabel}/${tabletName}/ ?\n\n${lines.join('\n')}`
   );
   if (!ok) return;
 
@@ -1714,10 +2116,12 @@ async function onExportSelected() {
     state.rootFolder,
     tabletName,
     state.assignments,
+    customExportFolder,
   );
 
   if (result.success) {
-    setStatus(`Exported ${result.count} image(s) to _Selected/${tabletName}/`);
+    setStatus(`Exported ${result.count} image(s) to ${folderLabel}/${tabletName}/`);
+    buildSelectedTree(); // refresh the tree
   } else {
     setStatus(`Export failed: ${result.error}`);
   }
@@ -1726,8 +2130,8 @@ async function onExportSelected() {
 // Restore saved mode on startup
 (function restoreMode() {
   const saved = localStorage.getItem('appMode');
-  if (saved === 'picker') {
-    switchMode('picker');
+  if (saved && saved !== appMode) {
+    switchMode(saved);
   }
 })();
 

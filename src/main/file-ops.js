@@ -72,7 +72,13 @@ function scanFolder(folderPath) {
     if (!entry.isDirectory() || entry.name.startsWith('_')) continue;
 
     const subPath = path.join(folderPath, entry.name);
-    const images = getImagesInFolder(subPath);
+    let images;
+    try {
+      images = getImagesInFolder(subPath);
+    } catch (err) {
+      console.warn(`Skipping ${entry.name}: ${err.message}`);
+      continue;
+    }
 
     if (images.length > 0) {
       result.subfolders.push({

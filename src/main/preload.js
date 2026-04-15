@@ -9,9 +9,19 @@ contextBridge.exposeInMainWorld('api', {
   selectStitcherExe: () => ipcRenderer.invoke('select-stitcher-exe'),
   loadPicks: (subfolderPath) => ipcRenderer.invoke('load-picks', subfolderPath),
   savePicks: (subfolderPath, picks) => ipcRenderer.invoke('save-picks', subfolderPath, picks),
-  exportSelected: (rootFolder, subfolderName, picks) => ipcRenderer.invoke('export-selected', rootFolder, subfolderName, picks),
+  exportSelected: (rootFolder, subfolderName, picks, customExportFolder) => ipcRenderer.invoke('export-selected', rootFolder, subfolderName, picks, customExportFolder),
+  selectExportFolder: () => ipcRenderer.invoke('select-export-folder'),
+  scanSelectedFolder: (path) => ipcRenderer.invoke('scan-selected-folder', path),
   cleanTabletCache: (rootFolder, tablets) => ipcRenderer.invoke('clean-tablet-cache', rootFolder, tablets),
   processTablets: (rootFolder, tablets) => ipcRenderer.invoke('process-tablets', rootFolder, tablets),
+
+  // Project management
+  listProjects: () => ipcRenderer.invoke('list-projects'),
+  getProject: (name) => ipcRenderer.invoke('get-project', name),
+  saveProject: (project) => ipcRenderer.invoke('save-project', project),
+  deleteProject: (name) => ipcRenderer.invoke('delete-project', name),
+  newProject: (name) => ipcRenderer.invoke('new-project', name),
+  selectMeasurementsFile: () => ipcRenderer.invoke('select-measurements-file'),
   onStitcherProgress: (callback) => ipcRenderer.on('stitcher-progress', (event, data) => callback(data)),
   offStitcherProgress: () => ipcRenderer.removeAllListeners('stitcher-progress'),
 
@@ -31,4 +41,5 @@ contextBridge.exposeInMainWorld('api', {
   rotateImage: (path, degrees) => ipcRenderer.invoke('rotate-image', path, degrees),
   rotateImagesBatch: (paths, degrees) => ipcRenderer.invoke('rotate-images-batch', paths, degrees),
   trimInRect: (path, rect, bgColor) => ipcRenderer.invoke('trim-in-rect', path, rect, bgColor),
+  deleteImage: (path) => ipcRenderer.invoke('delete-image', path),
 });

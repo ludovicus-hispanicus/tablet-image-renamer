@@ -1889,6 +1889,7 @@ function switchMode(mode) {
     state.assignments = {};
     state.reverseAssignments = {};
     updateButtons();
+    loadResults();
   }
 }
 

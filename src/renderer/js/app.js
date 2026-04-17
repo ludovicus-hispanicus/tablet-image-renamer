@@ -1,6 +1,7 @@
 // === State ===
 let appMode = 'picker'; // 'picker' or 'renamer'
 let customExportFolder = null; // null = use _Selected in root
+let currentUserName = null; // collaboration: display name for assignments
 
 const state = {
   rootFolder: null,
@@ -307,6 +308,8 @@ async function openFolder(folder) {
   dom.thumbGrid.innerHTML = '';
   dom.subfolderInfo.textContent = '';
   updateTreeStatusIcons();
+  // Start live collaboration refresh if in renamer mode
+  if (appMode === 'renamer') startStatusRefresh();
 }
 
 // Restore last folder on startup
@@ -1470,6 +1473,38 @@ function getResultsRoot() {
   return state.rootFolder;
 }
 
+// === Live collaboration: periodic refresh of review_status.json ===
+// Re-reads the shared status file every 10 seconds so changes from other
+// users (assignments, status updates) appear automatically.
+let statusRefreshInterval = null;
+
+function startStatusRefresh() {
+  stopStatusRefresh();
+  statusRefreshInterval = setInterval(async () => {
+    if (appMode !== 'renamer') return;
+    const root = getResultsRoot();
+    if (!root) return;
+    try {
+      const fresh = await window.api.loadReviewStatus(root);
+      // Only update if something actually changed (avoid unnecessary redraws)
+      const freshStr = JSON.stringify(fresh);
+      const currentStr = JSON.stringify(resultsState.reviewStatus);
+      if (freshStr !== currentStr) {
+        resultsState.reviewStatus = fresh;
+        updateTreeStatusIcons();
+        updateResultSummary();
+      }
+    } catch (e) { /* ignore — file might be mid-sync on Drive */ }
+  }, 10000);
+}
+
+function stopStatusRefresh() {
+  if (statusRefreshInterval) {
+    clearInterval(statusRefreshInterval);
+    statusRefreshInterval = null;
+  }
+}
+
 async function loadResults() {
   if (!state.rootFolder) return;
 
@@ -1771,19 +1806,43 @@ function updateTreeStatusIcons() {
 
     const oldIcon = item.querySelector('.tree-status');
     if (oldIcon) oldIcon.remove();
+    const oldAssign = item.querySelector('.tree-assign');
+    if (oldAssign) oldAssign.remove();
 
     const review = resultsState.reviewStatus[sub.name];
+    const assignedTo = review?.assignedTo || null;
+    const isMine = assignedTo === currentUserName;
+    const isOther = assignedTo && !isMine;
+
+    // Assignment indicator (before the status icon)
+    if (assignedTo) {
+      const assignEl = document.createElement('span');
+      assignEl.className = 'tree-assign';
+      if (isMine) {
+        assignEl.textContent = '\u270B'; // ✋ (me)
+        assignEl.title = 'Assigned to you';
+      } else {
+        assignEl.textContent = '\uD83D\uDD12'; // 🔒
+        assignEl.title = `Assigned to ${assignedTo}`;
+      }
+      item.appendChild(assignEl);
+    }
+
+    // Status icon
     const icon = document.createElement('span');
     icon.className = 'tree-status';
 
     if (review?.status) {
       icon.textContent = statusBadge(review.status);
-      icon.title = `Status: ${review.status} — click to change`;
+      icon.title = `Status: ${review.status}` + (assignedTo ? ` | ${assignedTo}` : '') + ' — click to change';
     } else {
       icon.textContent = '\u25CB';  // empty circle
       icon.title = 'Click to set status';
       icon.classList.add('tree-status-empty');
     }
+
+    // Dim items assigned to someone else
+    item.style.opacity = isOther ? '0.5' : '';
 
     icon.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1835,21 +1894,66 @@ function showStatusDropdown(anchorEl, tabletName) {
   // Close any existing popup
   document.querySelectorAll('.status-dropdown').forEach(el => el.remove());
 
-  const existing = resultsState.reviewStatus[tabletName]?.status || null;
+  const review = resultsState.reviewStatus[tabletName] || {};
+  const existing = review.status || null;
+  const assignedTo = review.assignedTo || null;
+  const isMine = assignedTo === currentUserName;
+  const isOther = assignedTo && !isMine;
   const rect = anchorEl.getBoundingClientRect();
 
   const menu = document.createElement('div');
   menu.className = 'status-dropdown';
-  menu.style.top = `${rect.bottom + 4}px`;
   menu.style.left = `${rect.left}px`;
+  // Position below the icon by default; flip above if it would go off-screen
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.visibility = 'hidden'; // measure first, then show
 
+  // Assignment section at the top
+  if (!assignedTo) {
+    const assignRow = document.createElement('div');
+    assignRow.className = 'status-dropdown-item';
+    assignRow.innerHTML = `<span class="status-dropdown-badge">\uD83D\uDCCC</span><span>Assign to me</span>`;
+    assignRow.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      menu.remove();
+      await assignTablet(tabletName, currentUserName);
+    });
+    menu.appendChild(assignRow);
+  } else if (isMine) {
+    const releaseRow = document.createElement('div');
+    releaseRow.className = 'status-dropdown-item';
+    releaseRow.innerHTML = `<span class="status-dropdown-badge">\uD83D\uDD13</span><span>Release</span>`;
+    releaseRow.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      menu.remove();
+      await assignTablet(tabletName, null);
+    });
+    menu.appendChild(releaseRow);
+  } else {
+    const infoRow = document.createElement('div');
+    infoRow.className = 'status-dropdown-item';
+    infoRow.style.opacity = '0.6';
+    infoRow.style.cursor = 'default';
+    infoRow.innerHTML = `<span class="status-dropdown-badge">\uD83D\uDD12</span><span>Assigned to ${assignedTo}</span>`;
+    menu.appendChild(infoRow);
+  }
+
+  // Divider
+  const divider = document.createElement('div');
+  divider.style.borderTop = '1px solid var(--border)';
+  divider.style.margin = '3px 0';
+  menu.appendChild(divider);
+
+  // Status options (only clickable if unassigned or assigned to me)
   for (const opt of STATUS_OPTIONS) {
     const row = document.createElement('div');
     row.className = 'status-dropdown-item' + (opt.key === existing ? ' active' : '');
+    if (isOther) row.style.opacity = '0.4';
     row.innerHTML = `<span class="status-dropdown-badge">${opt.badge}</span><span>${opt.label}</span>`;
     row.addEventListener('click', async (e) => {
       e.stopPropagation();
       menu.remove();
+      if (isOther) return; // can't change someone else's status
       await setTabletStatus(tabletName, opt.key);
     });
     menu.appendChild(row);
@@ -1857,7 +1961,17 @@ function showStatusDropdown(anchorEl, tabletName) {
 
   document.body.appendChild(menu);
 
-  // Close on outside click
+  // Flip above if the menu would go below the viewport
+  const menuRect = menu.getBoundingClientRect();
+  if (menuRect.bottom > window.innerHeight) {
+    menu.style.top = `${rect.top - menuRect.height - 4}px`;
+  }
+  // Also keep it on-screen horizontally
+  if (menuRect.right > window.innerWidth) {
+    menu.style.left = `${window.innerWidth - menuRect.width - 8}px`;
+  }
+  menu.style.visibility = '';
+
   const closeOnOutside = (e) => {
     if (!menu.contains(e.target)) {
       menu.remove();
@@ -1865,6 +1979,26 @@ function showStatusDropdown(anchorEl, tabletName) {
     }
   };
   setTimeout(() => document.addEventListener('mousedown', closeOnOutside), 0);
+}
+
+async function assignTablet(tabletName, userName) {
+  const existing = resultsState.reviewStatus[tabletName] || {};
+  if (userName) {
+    resultsState.reviewStatus[tabletName] = {
+      ...existing,
+      assignedTo: userName,
+      assignedAt: new Date().toISOString(),
+    };
+  } else {
+    delete existing.assignedTo;
+    delete existing.assignedAt;
+    if (!existing.status && !existing.notes) {
+      delete resultsState.reviewStatus[tabletName];
+    }
+  }
+  await window.api.saveReviewStatus(getResultsRoot(), resultsState.reviewStatus);
+  updateTreeStatusIcons();
+  updateResultSummary();
 }
 
 // === Settings ===
@@ -2001,14 +2135,21 @@ async function saveSettings() {
 // === Stitcher Processing ===
 let isStitcherRunning = false;
 
+// Helper: check if a tablet can be processed by the current user.
+// Only tablets assigned to the current user OR unassigned are processable.
+function isMyTablet(review) {
+  if (!review?.assignedTo) return true;   // unassigned = anyone can process
+  return review.assignedTo === currentUserName;
+}
+
 function updateProcessButton() {
   const btn = document.getElementById('btn-process');
-  const readyCount = Object.values(resultsState.reviewStatus)
-    .filter(r => r.status === 'updated').length;
-  btn.disabled = readyCount === 0 || isStitcherRunning || !state.rootFolder;
-  btn.title = readyCount > 0
-    ? `Process ${readyCount} ready (green) folder(s)`
-    : 'Mark folders as ready (green) in the tree first';
+  const myReadyCount = Object.values(resultsState.reviewStatus)
+    .filter(r => r.status === 'updated' && isMyTablet(r)).length;
+  btn.disabled = myReadyCount === 0 || isStitcherRunning || !state.rootFolder;
+  btn.title = myReadyCount > 0
+    ? `Process ${myReadyCount} of your ready (green) folder(s)`
+    : 'Mark your folders as ready (green) in the tree first';
 }
 
 async function onProcessReady() {
@@ -2018,11 +2159,11 @@ async function onProcessReady() {
   }
 
   const ready = Object.entries(resultsState.reviewStatus)
-    .filter(([, v]) => v.status === 'updated')
+    .filter(([, v]) => v.status === 'updated' && isMyTablet(v))
     .map(([name]) => name);
 
   if (ready.length === 0) {
-    alert('No folders are marked as ready (green).\n\nClick the circle next to a folder name in the tree to mark it.');
+    alert('No folders assigned to you are marked as ready (green).\n\nAssign tablets to yourself first, then mark them as ready.');
     return;
   }
 
@@ -2039,11 +2180,11 @@ async function reprocessUpdated() {
   }
 
   const updated = Object.entries(resultsState.reviewStatus)
-    .filter(([, v]) => v.status === 'updated')
+    .filter(([, v]) => v.status === 'updated' && isMyTablet(v))
     .map(([name]) => name);
 
   if (updated.length === 0) {
-    alert('No tablets are marked as updated (green).');
+    alert('No tablets assigned to you are marked as updated (green).');
     return;
   }
 
@@ -2205,7 +2346,12 @@ function switchMode(mode) {
   // Rebuild tree for the new mode
   buildTreeView();
   updateButtons();
-  if (mode === 'renamer') loadResults();
+  if (mode === 'renamer') {
+    loadResults();
+    startStatusRefresh();
+  } else {
+    stopStatusRefresh();
+  }
 }
 
 let selectedTreeFolders = []; // cached selected folder scan results
@@ -2442,6 +2588,54 @@ async function onExportSelected() {
     setStatus(`Export failed: ${result.error}`);
   }
 }
+
+// === User Identity (collaboration) ===
+// On startup, load or prompt for a display name. Used for tablet assignments.
+
+function showUserNameDialog(prefill) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('user-name-overlay');
+    const input = document.getElementById('user-name-input');
+    const okBtn = document.getElementById('user-name-ok');
+    input.value = prefill || '';
+    overlay.classList.remove('hidden');
+    input.focus();
+
+    function submit() {
+      const val = input.value.trim();
+      overlay.classList.add('hidden');
+      okBtn.removeEventListener('click', submit);
+      input.removeEventListener('keydown', onKey);
+      resolve(val || 'Anonymous');
+    }
+    function onKey(e) { if (e.key === 'Enter') submit(); }
+    okBtn.addEventListener('click', submit);
+    input.addEventListener('keydown', onKey);
+  });
+}
+
+(async function initUserIdentity() {
+  currentUserName = await window.api.getUserName();
+  if (!currentUserName) {
+    currentUserName = await showUserNameDialog('');
+    await window.api.setUserName(currentUserName);
+  }
+  updateUserBadge();
+})();
+
+function updateUserBadge() {
+  const el = document.getElementById('user-badge');
+  if (el) el.textContent = '\uD83D\uDC64 ' + (currentUserName || 'Anonymous');
+}
+
+document.getElementById('user-badge').addEventListener('click', async () => {
+  const newName = await showUserNameDialog(currentUserName);
+  if (newName && newName !== currentUserName) {
+    currentUserName = newName;
+    await window.api.setUserName(currentUserName);
+    updateUserBadge();
+  }
+});
 
 // Picker is always the default mode on startup
 

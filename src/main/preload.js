@@ -26,6 +26,10 @@ contextBridge.exposeInMainWorld('api', {
   offStitcherProgress: () => ipcRenderer.removeAllListeners('stitcher-progress'),
 
 
+  // User identity
+  getUserName: () => ipcRenderer.invoke('get-user-name'),
+  setUserName: (name) => ipcRenderer.invoke('set-user-name', name),
+
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   scanFolder: (path) => ipcRenderer.invoke('scan-folder', path),
   getThumbnail: (path) => ipcRenderer.invoke('get-thumbnail', path),

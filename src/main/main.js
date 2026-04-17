@@ -115,6 +115,32 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// === User Identity ===
+// Simple display name for the assignment/collaboration system.
+// Stored locally — no accounts, no passwords.
+function getUserFile() {
+  const userData = process.env.APPDATA
+    || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.config'));
+  const dir = path.join(userData, 'tablet-image-renamer');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'user.json');
+}
+
+ipcMain.handle('get-user-name', async () => {
+  const f = getUserFile();
+  if (!fs.existsSync(f)) return null;
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')).name || null; } catch (e) { return null; }
+});
+
+ipcMain.handle('set-user-name', async (event, name) => {
+  try {
+    fs.writeFileSync(getUserFile(), JSON.stringify({ name }, null, 2));
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 // === IPC Handlers ===
 
 ipcMain.handle('select-folder', async () => {

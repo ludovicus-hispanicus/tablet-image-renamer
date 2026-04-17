@@ -306,7 +306,7 @@
             </div>
             <div id="stitcher-status" class="hidden"></div>
             <div id="result-notes-container">
-              <textarea id="result-notes" placeholder="Add notes..." rows="3"></textarea>
+              <textarea id="result-notes" placeholder="Add notes..." rows="8"></textarea>
               <button id="result-save-notes">Save Notes</button>
             </div>
           </div>
@@ -319,6 +319,7 @@
   <footer id="statusbar">
     <span id="status-text">Select a folder to begin.</span>
     <span id="status-count"></span>
+    <span id="user-badge" title="Click to change your name"></span>
   </footer>
 
 
@@ -450,6 +451,18 @@
           <div class="help-row"><kbd>Drag</kbd> <span>Drag thumbnail onto structure slot</span></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- User Name Dialog -->
+  <div id="user-name-overlay" class="hidden">
+    <div id="user-name-panel">
+      <h3>Enter your name</h3>
+      <p style="color: var(--text-dim); font-size: 12px; margin-bottom: 12px;">
+        Used for tablet assignments when collaborating with others.
+      </p>
+      <input type="text" id="user-name-input" placeholder="Your name" autocomplete="off" />
+      <button id="user-name-ok" class="btn-save">OK</button>
     </div>
   </div>
 

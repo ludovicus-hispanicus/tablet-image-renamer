@@ -109,6 +109,8 @@ function getImagesInFolder(folderPath) {
   for (const file of files) {
     const ext = path.extname(file).toLowerCase();
     if (IMAGE_EXTENSIONS.has(ext)) {
+      // Skip SAM mask files (support files, not photos to process)
+      if (/_mask\.(png|tif|tiff|jpg|jpeg)$/i.test(file)) continue;
       const fullPath = path.join(folderPath, file);
       if (fs.statSync(fullPath).isFile()) {
         images.push({
@@ -121,7 +123,9 @@ function getImagesInFolder(folderPath) {
     }
   }
 
-  return images.sort((a, b) => a.name.localeCompare(b.name));
+  return images.sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+  );
 }
 
 /**

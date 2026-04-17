@@ -128,6 +128,15 @@ document.querySelectorAll('.slot[data-code]').forEach(slot => {
 
 // Help overlay
 document.getElementById('btn-help').addEventListener('click', toggleHelp);
+
+// Tree search: hide tree items whose name doesn't match the query (case-insensitive)
+document.getElementById('tree-search').addEventListener('input', (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll('#tree-list .tree-item').forEach(item => {
+    const name = item.textContent.toLowerCase();
+    item.classList.toggle('hidden-by-search', q && !name.includes(q));
+  });
+});
 document.getElementById('help-close').addEventListener('click', toggleHelp);
 document.getElementById('help-overlay').addEventListener('click', (e) => {
   if (e.target.id === 'help-overlay') toggleHelp();
@@ -165,25 +174,48 @@ document.addEventListener('mouseup', () => {
 });
 
 // === Right Panel Tabs ===
+// Tabs only change the right-panel content. The only tab that swaps the thumbnail
+// grid is Results (to show stitched results). Leaving Results restores the
+// image thumbnails for the currently selected tablet.
 document.querySelectorAll('.right-tab').forEach(tab => {
   tab.addEventListener('click', () => {
+    const newTab = tab.dataset.tab;
+    const leavingResults = activeTab === 'results' && newTab !== 'results';
+
     document.querySelectorAll('.right-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
-    document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+    document.getElementById(`tab-${newTab}`).classList.add('active');
 
-    activeTab = tab.dataset.tab;
+    activeTab = newTab;
+
     if (activeTab === 'results') {
       showResultThumbnails();
-    } else if (activeTab === 'tools') {
-      loadCurrentSubfolder();
-      updateToolInfo();
     } else {
-      // Restore source image thumbnails
-      loadCurrentSubfolder();
+      if (leavingResults) restoreThumbnailsForSelection();
+      if (activeTab === 'tools') updateToolInfo();
     }
   });
 });
+
+// Re-render the thumbnail grid from the current state.images (the last-clicked
+// tablet in the tree). Called when leaving the Results tab.
+function restoreThumbnailsForSelection() {
+  dom.thumbGrid.innerHTML = '';
+  if (!state.images || state.images.length === 0) return;
+
+  for (const img of state.images) {
+    const card = createThumbCard(img);
+    dom.thumbGrid.appendChild(card);
+    loadThumbnail(img.path, card);
+  }
+
+  // Restore visual selection state
+  if (state.selectedImage) {
+    const card = getCardForImage(state.selectedImage);
+    if (card) card.classList.add('primary');
+  }
+}
 
 // Results tab controls
 document.getElementById('result-save-notes').addEventListener('click', saveCurrentNotes);
@@ -221,9 +253,18 @@ document.getElementById('result-preview-reveal').addEventListener('click', () =>
     window.api.revealInExplorer(resultsState.results[resultsState.currentIndex].jpgPath);
   }
 });
+document.getElementById('result-preview-edit').addEventListener('click', editSelectedForCurrentResult);
 document.getElementById('result-preview-overlay').addEventListener('click', (e) => {
+  // Don't close if the "click" was actually the end of a pan drag
+  if (resultZoom.moved) { resultZoom.moved = false; return; }
   if (e.target.id === 'result-preview-overlay') closeResultPreview();
 });
+
+// Zoom + pan on the result preview overlay
+document.getElementById('result-preview-overlay').addEventListener('wheel', onResultWheel, { passive: false });
+document.getElementById('result-preview-overlay').addEventListener('mousedown', onResultPanStart);
+window.addEventListener('mousemove', onResultPanMove);
+window.addEventListener('mouseup', onResultPanEnd);
 
 // Ctrl+A to select all
 document.addEventListener('keydown', (e) => {
@@ -254,20 +295,17 @@ async function openFolder(folder) {
     return;
   }
 
-  setStatus(`Found ${state.subfolders.length} subfolder(s) with ${result.totalImages} images.`);
-  state.currentIndex = 0;
+  setStatus(`Found ${state.subfolders.length} subfolder(s) with ${result.totalImages} images. Click a folder to start.`);
+  state.currentIndex = -1;  // no folder auto-opened; user picks one from the tree
 
   // Load statuses early so tree icons show immediately
   resultsState.reviewStatus = await window.api.loadReviewStatus(getResultsRoot());
 
   buildTreeView();
   loadResults();
-  if (appMode === 'picker') {
-    loadCurrentSubfolder();
-  } else {
-    dom.thumbGrid.innerHTML = '';
-    dom.subfolderInfo.textContent = '';
-  }
+  // Thumbnail grid stays empty until the user clicks a folder in the tree.
+  dom.thumbGrid.innerHTML = '';
+  dom.subfolderInfo.textContent = '';
   updateTreeStatusIcons();
 }
 
@@ -332,6 +370,7 @@ function navigateSubfolder(direction) {
 
 async function loadCurrentSubfolder() {
   const sub = state.subfolders[state.currentIndex];
+  if (!sub) return;
   const total = state.subfolders.length;
 
   dom.subfolderInfo.textContent = `${sub.name}  (${state.currentIndex + 1} / ${total})`;
@@ -747,6 +786,11 @@ function onKeyDown(e) {
     return;
   }
 
+  // If focus is in an input/textarea, don't intercept single-key shortcuts
+  // (except Escape, handled below, which should still close overlays).
+  const inInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+  if (inInput && e.key !== 'Escape') return;
+
   // Close overlays on Escape
   if (e.key === 'Escape') {
     if (!document.getElementById('result-preview-overlay').classList.contains('hidden')) { closeResultPreview(); return; }
@@ -765,6 +809,7 @@ function onKeyDown(e) {
     else if (e.key === 'ArrowRight') { navigateResultPreview(1); e.preventDefault(); }
     else if (e.key.toLowerCase() === 'r') { setResultStatus('revision'); e.preventDefault(); }
     else if (e.key.toLowerCase() === 'u') { setResultStatus('updated'); e.preventDefault(); }
+    else if (e.key === '0') { resetResultZoom(); e.preventDefault(); }
     return;
   }
 
@@ -801,14 +846,8 @@ function onKeyDown(e) {
       viewerNavigate(1); e.preventDefault();
     } else if (vKey === 's' && !e.ctrlKey) {
       setActiveTool('segment'); e.preventDefault();
-    } else if (previewTool.active === 'segment' && vKey === 'b' && !e.ctrlKey) {
-      setSegMode('box'); e.preventDefault();
-    } else if (previewTool.active === 'segment' && vKey === 'a' && !e.ctrlKey) {
-      setSegMode('add'); e.preventDefault();
-    } else if (previewTool.active === 'segment' && (vKey === 'r' || vKey === 'x') && !e.ctrlKey && !e.altKey) {
-      setSegMode('remove'); e.preventDefault();
-    } else if (previewTool.active === 'segment' && e.key === 'z' && e.ctrlKey) {
-      segUndo(); e.preventDefault();
+    } else if (e.key === '0' && !e.ctrlKey) {
+      resetViewerZoom(); e.preventDefault();
     } else if (e.key === 'Enter' && previewTool.active === 'segment' && segTool.currentMaskBase64) {
       applySegMask(); e.preventDefault();
     } else if (vKey === 'p' && appMode === 'picker') {
@@ -921,6 +960,8 @@ function isViewerOpen() {
 
 async function enterViewerMode(imagePath) {
   if (!imagePath) return;
+  // Opening an image is a fresh start — drop any leftover mask/box state
+  clearSegState();
   viewerCurrentPath = imagePath;
   dom.thumbGridMode.classList.add('hidden');
   dom.viewerMode.classList.remove('hidden');
@@ -935,13 +976,24 @@ function exitViewerMode() {
   dom.viewerImage.src = '';
   viewerCurrentPath = null;
   clearViewerRect();
+  // Always deactivate the segment tool when leaving the viewer — next image
+  // should start fresh without inherited mask state.
+  if (previewTool.active === 'segment') setActiveTool('segment');
+  // Clear the history panel — no image is viewed
+  refreshSegHistory();
 }
 
 async function loadViewerImage(imagePath) {
   viewerCurrentPath = imagePath;
   dom.viewerImage.src = '';
   clearViewerRect();
-  if (previewTool.active === 'segment') clearSegState();
+  resetViewerZoom();
+  if (previewTool.active === 'segment') {
+    clearSegState();
+  }
+  // Refresh the segment history panel for whichever image is now open,
+  // even if the tool isn't currently active.
+  refreshSegHistory();
 
   const idx = state.images.findIndex(i => i.path === imagePath);
   const total = state.images.length;
@@ -956,6 +1008,184 @@ async function loadViewerImage(imagePath) {
   }
   updateToolInfo();
   updateViewerPickButton();
+}
+
+// === Viewer zoom + pan ===
+// CSS-transform zoom on the image + overlay canvases (they move as one unit).
+// Mouse wheel zooms centered on cursor. Middle-mouse drag pans. Double-click
+// on the image (outside any active tool) or pressing "0" resets to fit.
+
+const viewerZoom = {
+  scale: 1,
+  panX: 0,
+  panY: 0,
+  panning: false,
+  panStartX: 0,
+  panStartY: 0,
+  panStartPanX: 0,
+  panStartPanY: 0,
+};
+
+function applyViewerTransform() {
+  const t = `translate(${viewerZoom.panX}px, ${viewerZoom.panY}px) scale(${viewerZoom.scale})`;
+  // Anchor at top-left so the cursor-centered zoom math works correctly
+  const origin = '0 0';
+  if (dom.viewerImage) {
+    dom.viewerImage.style.transformOrigin = origin;
+    dom.viewerImage.style.transform = t;
+  }
+  const segC = document.getElementById('seg-canvas-container');
+  if (segC) {
+    segC.style.transformOrigin = origin;
+    segC.style.transform = t;
+  }
+  const rectO = document.getElementById('viewer-rect-overlay');
+  if (rectO) {
+    rectO.style.transformOrigin = origin;
+    rectO.style.transform = t;
+  }
+}
+
+function resetViewerZoom() {
+  viewerZoom.scale = 1;
+  viewerZoom.panX = 0;
+  viewerZoom.panY = 0;
+  applyViewerTransform();
+}
+
+function onViewerWheel(e) {
+  if (!isViewerOpen()) return;
+  // Only zoom when cursor is over the stage (already true via event target)
+  e.preventDefault();
+
+  const stageRect = dom.viewerStage.getBoundingClientRect();
+  const cx = e.clientX - stageRect.left;
+  const cy = e.clientY - stageRect.top;
+
+  const oldScale = viewerZoom.scale;
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = Math.max(0.1, Math.min(10, oldScale * factor));
+  if (newScale === oldScale) return;
+
+  // Keep the point under the cursor stable as we zoom:
+  // pan' = cursor - (cursor - pan) * (newScale / oldScale)
+  viewerZoom.panX = cx - (cx - viewerZoom.panX) * (newScale / oldScale);
+  viewerZoom.panY = cy - (cy - viewerZoom.panY) * (newScale / oldScale);
+  viewerZoom.scale = newScale;
+  applyViewerTransform();
+}
+
+function onViewerPanStart(e) {
+  if (!isViewerOpen()) return;
+  // Middle mouse always pans. Left mouse pans too, but only when no tool is
+  // active (left-click with an active tool belongs to that tool, e.g. drawing
+  // a bounding box for the segment tool).
+  const isMiddle = e.button === 1;
+  const isLeftNoTool = e.button === 0 && !previewTool.active;
+  if (!isMiddle && !isLeftNoTool) return;
+
+  e.preventDefault();
+  viewerZoom.panning = true;
+  viewerZoom.panStartX = e.clientX;
+  viewerZoom.panStartY = e.clientY;
+  viewerZoom.panStartPanX = viewerZoom.panX;
+  viewerZoom.panStartPanY = viewerZoom.panY;
+  document.body.style.cursor = 'grabbing';
+}
+
+function onViewerPanMove(e) {
+  if (!viewerZoom.panning) return;
+  viewerZoom.panX = viewerZoom.panStartPanX + (e.clientX - viewerZoom.panStartX);
+  viewerZoom.panY = viewerZoom.panStartPanY + (e.clientY - viewerZoom.panStartY);
+  applyViewerTransform();
+}
+
+function onViewerPanEnd() {
+  if (!viewerZoom.panning) return;
+  viewerZoom.panning = false;
+  document.body.style.cursor = '';
+}
+
+// === Result preview zoom + pan (mirrors the viewer zoom/pan) ===
+const resultZoom = {
+  scale: 1,
+  panX: 0,
+  panY: 0,
+  panning: false,
+  panStartX: 0,
+  panStartY: 0,
+  panStartPanX: 0,
+  panStartPanY: 0,
+};
+
+function applyResultTransform() {
+  const img = document.getElementById('result-preview-image');
+  if (!img) return;
+  img.style.transformOrigin = '0 0';
+  img.style.transform = `translate(${resultZoom.panX}px, ${resultZoom.panY}px) scale(${resultZoom.scale})`;
+}
+
+function resetResultZoom() {
+  resultZoom.scale = 1;
+  resultZoom.panX = 0;
+  resultZoom.panY = 0;
+  applyResultTransform();
+}
+
+function isResultPreviewOpen() {
+  return !document.getElementById('result-preview-overlay').classList.contains('hidden');
+}
+
+function onResultWheel(e) {
+  if (!isResultPreviewOpen()) return;
+  e.preventDefault();
+
+  const overlay = document.getElementById('result-preview-overlay');
+  const rect = overlay.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+
+  const oldScale = resultZoom.scale;
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = Math.max(0.1, Math.min(10, oldScale * factor));
+  if (newScale === oldScale) return;
+
+  resultZoom.panX = cx - (cx - resultZoom.panX) * (newScale / oldScale);
+  resultZoom.panY = cy - (cy - resultZoom.panY) * (newScale / oldScale);
+  resultZoom.scale = newScale;
+  applyResultTransform();
+}
+
+function onResultPanStart(e) {
+  if (!isResultPreviewOpen()) return;
+  // Ignore clicks on buttons / controls
+  if (e.target.closest('button')) return;
+  // Left or middle mouse pans
+  if (e.button !== 0 && e.button !== 1) return;
+  e.preventDefault();
+  resultZoom.panning = true;
+  resultZoom.moved = false;  // becomes true if mouse actually moves during the drag
+  resultZoom.panStartX = e.clientX;
+  resultZoom.panStartY = e.clientY;
+  resultZoom.panStartPanX = resultZoom.panX;
+  resultZoom.panStartPanY = resultZoom.panY;
+  document.body.style.cursor = 'grabbing';
+}
+
+function onResultPanMove(e) {
+  if (!resultZoom.panning) return;
+  const dx = e.clientX - resultZoom.panStartX;
+  const dy = e.clientY - resultZoom.panStartY;
+  if (Math.abs(dx) > 2 || Math.abs(dy) > 2) resultZoom.moved = true;
+  resultZoom.panX = resultZoom.panStartPanX + dx;
+  resultZoom.panY = resultZoom.panStartPanY + dy;
+  applyResultTransform();
+}
+
+function onResultPanEnd() {
+  if (!resultZoom.panning) return;
+  resultZoom.panning = false;
+  document.body.style.cursor = '';
 }
 
 function viewerNavigate(direction) {
@@ -1361,6 +1591,7 @@ async function openResultPreview(index) {
   resultsState.currentIndex = index;
   const overlay = document.getElementById('result-preview-overlay');
   overlay.classList.remove('hidden');
+  resetResultZoom();
   await loadResultPreviewImage(index);
 }
 
@@ -1374,6 +1605,7 @@ async function loadResultPreviewImage(index) {
 
   const imgEl = document.getElementById('result-preview-image');
   imgEl.src = '';
+  resetResultZoom();
   const dataUrl = await window.api.getFullImage(result.jpgPath);
   if (dataUrl) imgEl.src = dataUrl;
 }
@@ -1389,6 +1621,35 @@ function navigateResultPreview(direction) {
 function closeResultPreview() {
   document.getElementById('result-preview-overlay').classList.add('hidden');
   document.getElementById('result-preview-image').src = '';
+}
+
+// Jump from a result preview back to the tablet's _Selected/ images so the
+// user can re-edit (apply SAM, fix assignments, re-export, etc.).
+async function editSelectedForCurrentResult() {
+  const result = resultsState.results[resultsState.currentIndex];
+  if (!result) return;
+
+  closeResultPreview();
+
+  // Ensure we're in Renamer mode (the _Selected/ tree)
+  if (appMode !== 'renamer') {
+    switchMode('renamer');
+    // Wait for the tree to rebuild
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  // Find the matching _Selected/ tablet folder by name
+  // Rebuild the tree so we have fresh selectedTreeFolders
+  await buildSelectedTree();
+  const idx = selectedTreeFolders.findIndex(f => f.name === result.name);
+  if (idx < 0) {
+    setStatus(`No _Selected/ folder found for ${result.name}`);
+    return;
+  }
+
+  // Load that tablet and switch to Tools tab for immediate editing
+  await loadSelectedFolder(idx);
+  document.querySelector('.right-tab[data-tab="tools"]')?.click();
 }
 
 // Set or toggle a result's review status. Clicking the same status clears it.
@@ -1449,17 +1710,28 @@ function updateResultPreviewUI(review) {
 }
 
 function statusBadge(status) {
-  if (status === 'updated') return '\uD83D\uDFE2';
-  if (status === 'sent') return '\uD83D\uDFE1';
-  return '\uD83D\uDD34';
+  if (status === 'updated') return '\uD83D\uDFE2';   // 🟢
+  if (status === 'sent') return '\uD83D\uDFE1';      // 🟡
+  if (status === 'finished') return '\u26AA';        // ⚪ (filled white circle)
+  return '\uD83D\uDD34';                              // 🔴
 }
+
+const STATUS_OPTIONS = [
+  { key: null,         label: 'Clear',    badge: '\u25CB'  },  // ○ empty
+  { key: 'updated',    label: 'Ready',    badge: '\uD83D\uDFE2' },
+  { key: 'revision',   label: 'Revision', badge: '\uD83D\uDD34' },
+  { key: 'sent',       label: 'Sent',     badge: '\uD83D\uDFE1' },
+  { key: 'finished',   label: 'Finished', badge: '\u26AA' },
+];
 
 function updateResultSummary() {
   const statuses = Object.values(resultsState.reviewStatus);
   const revCount = statuses.filter(r => r.status === 'revision').length;
   const updCount = statuses.filter(r => r.status === 'updated').length;
   const sentCount = statuses.filter(r => r.status === 'sent').length;
+  const finCount = statuses.filter(r => r.status === 'finished').length;
   const parts = [`${resultsState.results.length} results`];
+  if (finCount) parts.push(`${finCount} finished`);
   if (sentCount) parts.push(`${sentCount} sent`);
   if (revCount) parts.push(`${revCount} revision`);
   if (updCount) parts.push(`${updCount} updated`);
@@ -1506,21 +1778,16 @@ function updateTreeStatusIcons() {
 
     if (review?.status) {
       icon.textContent = statusBadge(review.status);
-      const titles = {
-        revision: 'Needs revision \u2192 click: clear',
-        updated: 'Ready \u2192 click: revision',
-        sent: 'Sent \u2192 click: clear',
-      };
-      icon.title = titles[review.status] || '';
+      icon.title = `Status: ${review.status} — click to change`;
     } else {
       icon.textContent = '\u25CB';  // empty circle
-      icon.title = 'Click to mark as ready';
+      icon.title = 'Click to set status';
       icon.classList.add('tree-status-empty');
     }
 
     icon.addEventListener('click', (e) => {
       e.stopPropagation();
-      toggleTreeStatus(sub.name);
+      showStatusDropdown(icon, sub.name);
     });
     item.appendChild(icon);
   });
@@ -1528,25 +1795,13 @@ function updateTreeStatusIcons() {
   updateProcessButton();
 }
 
-async function toggleTreeStatus(tabletName) {
+async function setTabletStatus(tabletName, newStatus) {
   const existing = resultsState.reviewStatus[tabletName] || {};
 
-  // Cycle: none → updated (green) → revision (red) → clear
-  // Yellow (sent) → click → clear
-  let nextStatus;
-  if (!existing.status) {
-    nextStatus = 'updated';
-  } else if (existing.status === 'updated') {
-    nextStatus = 'revision';
-  } else {
-    // revision, sent, anything else → clear
-    nextStatus = null;
-  }
-
-  if (nextStatus) {
+  if (newStatus) {
     resultsState.reviewStatus[tabletName] = {
       ...existing,
-      status: nextStatus,
+      status: newStatus,
       reviewedAt: new Date().toISOString(),
     };
   } else {
@@ -1567,12 +1822,49 @@ async function toggleTreeStatus(tabletName) {
     const card = document.querySelector(`.result-card[data-index="${resultIdx}"]`);
     if (card) {
       const review = resultsState.reviewStatus[tabletName];
-      card.classList.remove('revision', 'updated', 'sent');
+      card.classList.remove('revision', 'updated', 'sent', 'finished');
       if (review?.status) card.classList.add(review.status);
       const badge = card.querySelector('.result-badge');
       if (badge) badge.textContent = statusBadge(review?.status);
     }
   }
+}
+
+// Popup dropdown near the clicked icon listing all status options
+function showStatusDropdown(anchorEl, tabletName) {
+  // Close any existing popup
+  document.querySelectorAll('.status-dropdown').forEach(el => el.remove());
+
+  const existing = resultsState.reviewStatus[tabletName]?.status || null;
+  const rect = anchorEl.getBoundingClientRect();
+
+  const menu = document.createElement('div');
+  menu.className = 'status-dropdown';
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${rect.left}px`;
+
+  for (const opt of STATUS_OPTIONS) {
+    const row = document.createElement('div');
+    row.className = 'status-dropdown-item' + (opt.key === existing ? ' active' : '');
+    row.innerHTML = `<span class="status-dropdown-badge">${opt.badge}</span><span>${opt.label}</span>`;
+    row.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      menu.remove();
+      await setTabletStatus(tabletName, opt.key);
+    });
+    menu.appendChild(row);
+  }
+
+  document.body.appendChild(menu);
+
+  // Close on outside click
+  const closeOnOutside = (e) => {
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener('mousedown', closeOnOutside);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeOnOutside), 0);
 }
 
 // === Settings ===
@@ -1876,30 +2168,44 @@ function switchMode(mode) {
   document.getElementById('btn-mode-picker').classList.toggle('active', mode === 'picker');
   document.body.classList.toggle('picker-mode', mode === 'picker');
 
-  localStorage.setItem('appMode', mode);
+  // Reset selection / thumbnails / panels on every mode switch
+  // Close the full-image viewer if it was open (so we don't keep showing an
+  // image that belongs to the other mode's folder)
+  if (isViewerOpen()) exitViewerMode();
 
-  // Toggle tree view
+  // Also deactivate any active tool (like Segment) to avoid stale state
+  if (previewTool.active) setActiveTool(previewTool.active);
+
+  state.currentIndex = -1;
+  selectedTreeIndex = -1;
+  state.images = [];
+  state.selectedImage = null;
+  state.selectedImages.clear();
+  state.assignments = {};
+  state.reverseAssignments = {};
+  dom.thumbGrid.innerHTML = '';
+  dom.subfolderInfo.textContent = '';
+
+  // Reset tree search
+  const searchInput = document.getElementById('tree-search');
+  if (searchInput) searchInput.value = '';
+
+  // Always return to the Structure tab on mode switch
+  document.querySelectorAll('.right-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === 'structure');
+  });
+  document.querySelectorAll('.tab-content').forEach(c => {
+    c.classList.toggle('active', c.id === 'tab-structure');
+  });
+  activeTab = 'structure';
+
+  // Refresh the structure diagram so stale slot highlights/filenames clear
+  updateStructureDiagram();
+
+  // Rebuild tree for the new mode
   buildTreeView();
-  if (mode === 'picker') {
-    updateTreeActive();
-    updateTreeStatusIcons();
-  }
-
-  // Reload current subfolder to apply mode-specific logic
-  if (mode === 'picker') {
-    if (state.subfolders.length > 0 && state.currentIndex >= 0) {
-      loadCurrentSubfolder();
-    }
-  } else {
-    // Renamer mode: clear thumbnails until user picks a selected folder
-    dom.thumbGrid.innerHTML = '';
-    dom.subfolderInfo.textContent = '';
-    state.images = [];
-    state.assignments = {};
-    state.reverseAssignments = {};
-    updateButtons();
-    loadResults();
-  }
+  updateButtons();
+  if (mode === 'renamer') loadResults();
 }
 
 let selectedTreeFolders = []; // cached selected folder scan results
@@ -2137,13 +2443,7 @@ async function onExportSelected() {
   }
 }
 
-// Restore saved mode on startup
-(function restoreMode() {
-  const saved = localStorage.getItem('appMode');
-  if (saved && saved !== appMode) {
-    switchMode(saved);
-  }
-})();
+// Picker is always the default mode on startup
 
 // =====================================================================
 // Tools tab + Segmentation tool
@@ -2163,7 +2463,6 @@ const previewTool = {
 };
 
 const segTool = {
-  mode: 'box',           // 'box' | 'add' | 'remove'
   bgColor: 'white',
   maskOpacity: 0.5,
 
@@ -2174,21 +2473,30 @@ const segTool = {
   imageWidth: 0,            // actual original image dimensions (from SAM encode)
   imageHeight: 0,
 
-  // Bounding box (normalized 0..1 coordinates)
+  // Bounding box being drawn right now (normalized 0..1 coordinates)
   box: null,              // { x1, y1, x2, y2 } in 0..1 range, or null
 
-  // Click points (normalized 0..1 coordinates)
-  positivePoints: [],     // [{x, y}, ...] in 0..1 range
-  negativePoints: [],     // [{x, y}, ...] in 0..1 range
+  // Operation for the current drag: 'new' | 'add' | 'sub' based on modifier keys
+  dragOp: 'new',
 
-  // Current mask
+  // The combined selection mask (accumulates via add/subtract operations)
   currentMaskBase64: null,
+
+  // Fine rotation (degrees) applied at Apply time
+  rotation: 0,
 
   // Canvas references (set on init)
   maskCanvas: null,
   maskCtx: null,
   interCanvas: null,
   interCtx: null,
+
+  // Marching ants animation
+  edgePixels: null,       // cached list of boundary pixels { x, y, t } (t=x+y for dash phase)
+  edgeCanvasSize: null,   // { w, h } the edge pixels were computed for
+  antsOffset: 0,          // current dash phase offset
+  antsRAF: null,          // requestAnimationFrame id
+  antsLastTick: 0,        // time of last offset increment
 };
 
 function setActiveTool(toolName) {
@@ -2207,10 +2515,10 @@ function setActiveTool(toolName) {
     deactivateSegTool();
   }
 
-  if (newTool && !isViewerOpen() && state.selectedImage) {
-    enterViewerMode(state.selectedImage);
-  } else if (newTool && !state.selectedImage) {
-    setStatus('Select an image first, then pick a tool.');
+  // The tool just activates. It only works when an image is open in the viewer,
+  // so if the user isn't viewing one yet, give a hint instead of auto-opening.
+  if (newTool && !isViewerOpen()) {
+    setStatus('Open an image (double-click a thumbnail) to use the tool.');
   }
 }
 
@@ -2255,18 +2563,144 @@ function updateRectBox(box, r) {
 
 function activateSegTool() {
   clearSegState();
-  segTool.mode = 'box';
 
   const container = document.getElementById('seg-canvas-container');
   container.classList.remove('hidden');
   container.classList.add('active');
+  // Ensure no stale modifier-cursor classes from a previous session
+  dom.viewerStage.classList.remove('mod-add', 'mod-sub');
 
   initSegCanvases();
-  updateSegModeButtons();
-  updateSegStatus('Draw a rectangle around the tablet to begin.');
+  updateSegStatus('Draw a box. Shift+draw to add, Alt+draw to subtract.');
   updateSegActionButtons();
+  refreshSegHistory();
 
   startSegServerIfNeeded();
+}
+
+// Reload the history list for the current viewer image
+async function refreshSegHistory() {
+  const listEl = document.getElementById('seg-history-list');
+  if (!listEl) return;
+  if (!viewerCurrentPath) {
+    listEl.className = 'seg-history-empty';
+    listEl.textContent = 'Open an image to see history.';
+    updateSegSaveButton(false);
+    return;
+  }
+
+  // Check if this image was already marked as saved earlier in the session
+  try {
+    const savedStatus = await window.api.segIsSaved(viewerCurrentPath);
+    updateSegSaveButton(!!savedStatus?.saved);
+  } catch (e) { updateSegSaveButton(false); }
+
+  const data = await window.api.segGetHistory(viewerCurrentPath);
+  const steps = data?.steps || [];
+  const current = data?.current ?? -1;
+
+  if (steps.length === 0) {
+    listEl.className = 'seg-history-empty';
+    listEl.textContent = 'No history yet.';
+    return;
+  }
+
+  // Newest step first (top of list)
+  const ordered = [...steps].sort((a, b) => b.step - a.step);
+
+  listEl.className = '';
+  listEl.innerHTML = '';
+  for (const s of ordered) {
+    const item = document.createElement('div');
+    const isCurrent = s.step === current;
+    item.className = 'seg-history-item' + (isCurrent ? ' seg-history-current' : '');
+    const when = new Date(s.mtime);
+    const label = s.step === 0 ? 'Original' : `Step ${s.step}`;
+    item.innerHTML = `
+      <span class="seg-history-marker">${isCurrent ? '\u25B6' : ''}</span>
+      <div class="seg-history-label">
+        <span>${label}</span>
+        <span class="seg-history-time">${when.toLocaleString()}</span>
+      </div>
+    `;
+    if (!isCurrent) {
+      item.addEventListener('click', () => jumpToSegStep(s.step));
+    }
+    listEl.appendChild(item);
+  }
+}
+
+async function markSegSaved() {
+  if (!viewerCurrentPath) {
+    setStatus('Open an image first.');
+    return;
+  }
+  const ok = confirm('Mark this image as saved?\n\nThe history stays available for this session, but will be deleted when the app is restarted.');
+  if (!ok) return;
+
+  try {
+    const result = await window.api.segMarkSaved(viewerCurrentPath);
+    if (result && result.status === 'ok') {
+      updateSegStatus('Saved. History will be cleaned up on next app start.');
+      setStatus('Marked as saved.');
+      updateSegSaveButton(true);
+      // Return to the thumbnail grid — done editing this tablet
+      if (previewTool.active) setActiveTool(previewTool.active);
+      if (isViewerOpen()) exitViewerMode();
+      // Switch right panel back to Structure — editing is done
+      const structTab = document.querySelector('.right-tab[data-tab="structure"]');
+      if (structTab) structTab.click();
+    } else {
+      updateSegStatus(`Save error: ${result?.error || 'failed'}`);
+    }
+  } catch (err) {
+    updateSegStatus(`Save error: ${err.message}`);
+  }
+}
+
+function updateSegSaveButton(isSaved) {
+  const btn = document.getElementById('seg-save');
+  if (!btn) return;
+  if (isSaved) {
+    btn.textContent = '\u2713 Saved';
+    btn.disabled = true;
+  } else {
+    btn.innerHTML = '&#x1F4BE; Save';
+    btn.disabled = false;
+  }
+}
+
+async function jumpToSegStep(step) {
+  if (!viewerCurrentPath) return;
+
+  previewTool.busy = true;
+  updateSegStatus(`Jumping to step ${step}...`);
+
+  try {
+    const result = await window.api.segJumpToStep(viewerCurrentPath, step);
+    if (result && result.status === 'ok') {
+      updateSegStatus(`Now at ${step === 0 ? 'Original' : 'step ' + step}.`);
+      setStatus(`Jumped to ${step === 0 ? 'Original' : 'step ' + step}.`);
+
+      if (result.thumbnail) {
+        const card = getCardForImage(viewerCurrentPath);
+        if (card) {
+          const imgEl = card.querySelector('img');
+          if (imgEl) imgEl.src = result.thumbnail;
+        }
+      }
+
+      clearSegState();
+      if (isViewerOpen()) await loadViewerImage(viewerCurrentPath);
+      refreshSegHistory();
+    } else {
+      updateSegStatus(`Jump error: ${result?.error || 'failed'}`);
+    }
+  } catch (err) {
+    updateSegStatus(`Jump error: ${err.message}`);
+  }
+
+  previewTool.busy = false;
 }
 
 function deactivateSegTool() {
@@ -2274,21 +2708,45 @@ function deactivateSegTool() {
   const container = document.getElementById('seg-canvas-container');
   container.classList.add('hidden');
   container.classList.remove('active');
+  // Drop modifier-cursor classes
+  dom.viewerStage.classList.remove('mod-add', 'mod-sub');
   clearSegCanvases();
 }
 
 function clearSegState() {
   segTool.box = null;
-  segTool.positivePoints = [];
-  segTool.negativePoints = [];
   segTool.currentMaskBase64 = null;
   segTool.imageEncoded = false;
   segTool.encodedImagePath = null;
   segTool.imageWidth = 0;
   segTool.imageHeight = 0;
+  segTool.edgePixels = null;
+  segTool.edgeCanvasSize = null;
+  segTool.dragOp = 'new';
+  segTool.rotation = 0;
+  updateSegRotationUI();
+  stopMarchingAntsAnimation();
   clearViewerRect();
   clearSegCanvases();
   updateSegActionButtons();
+}
+
+function updateSegRotationUI() {
+  const slider = document.getElementById('seg-rotation');
+  const num = document.getElementById('seg-rotation-num');
+  if (slider) slider.value = segTool.rotation;
+  if (num) num.value = segTool.rotation;
+  applySegRotationPreview();
+}
+
+function applySegRotationPreview() {
+  // Rotate only the mask/interaction canvases so the user sees the rotation live
+  const maskC = segTool.maskCanvas;
+  const interC = segTool.interCanvas;
+  const t = `rotate(${segTool.rotation}deg)`;
+  const origin = '50% 50%';
+  if (maskC) { maskC.style.transformOrigin = origin; maskC.style.transform = t; }
+  if (interC) { interC.style.transformOrigin = origin; interC.style.transform = t; }
 }
 
 function initSegCanvases() {
@@ -2312,8 +2770,6 @@ function resizeSegCanvases() {
     canvas.style.width = `${disp.width}px`;
     canvas.style.height = `${disp.height}px`;
   }
-
-  renderSegPoints();
 }
 
 function clearSegCanvases() {
@@ -2356,6 +2812,7 @@ function canvasToImageCoords(canvasX, canvasY) {
 function onViewerMouseDown(e) {
   if (previewTool.active !== 'segment' || previewTool.busy) return;
   if (!isViewerOpen()) return;
+  if (e.button !== 0) return;
 
   const disp = getDisplayedImageRect();
   if (!disp) return;
@@ -2364,46 +2821,26 @@ function onViewerMouseDown(e) {
   const x = e.clientX - stageRect.left;
   const y = e.clientY - stageRect.top;
 
-  // Only act if click is on the image
+  // Only start drawing if the cursor is over the image
   if (x < disp.left || x > disp.left + disp.width ||
       y < disp.top || y > disp.top + disp.height) return;
 
-  if (segTool.mode === 'box') {
-    if (e.button !== 0) return;
-    e.preventDefault();
+  e.preventDefault();
 
-    // Start drawing bounding box (uses existing rect overlay)
-    previewTool.drawing = true;
-    previewTool.startX = x;
-    previewTool.startY = y;
-    previewTool.rectDisplay = { x, y, w: 0, h: 0 };
+  // Determine the operation from modifier keys (like Photoshop)
+  if (e.shiftKey) segTool.dragOp = 'add';
+  else if (e.altKey) segTool.dragOp = 'sub';
+  else segTool.dragOp = 'new';
 
-    const overlay = document.getElementById('viewer-rect-overlay');
-    const box = document.getElementById('viewer-rect-box');
-    overlay.classList.remove('hidden');
-    updateRectBox(box, previewTool.rectDisplay);
+  previewTool.drawing = true;
+  previewTool.startX = x;
+  previewTool.startY = y;
+  previewTool.rectDisplay = { x, y, w: 0, h: 0 };
 
-  } else if (segTool.mode === 'add' || segTool.mode === 'remove') {
-    e.preventDefault();
-    const disp = getDisplayedImageRect();
-    if (!disp) return;
-
-    // Store as normalized (0..1) coordinates
-    const normPt = {
-      x: (x - disp.left) / disp.width,
-      y: (y - disp.top) / disp.height,
-    };
-
-    if (e.button === 2 || segTool.mode === 'remove') {
-      segTool.negativePoints.push(normPt);
-    } else {
-      segTool.positivePoints.push(normPt);
-    }
-
-    renderSegPoints();
-    updateSegActionButtons();
-    requestSegPrediction();
-  }
+  const overlay = document.getElementById('viewer-rect-overlay');
+  const box = document.getElementById('viewer-rect-box');
+  overlay.classList.remove('hidden');
+  updateRectBox(box, previewTool.rectDisplay);
 }
 
 function onViewerMouseMove(e) {
@@ -2424,9 +2861,17 @@ function onViewerMouseMove(e) {
   updateRectBox(document.getElementById('viewer-rect-box'), previewTool.rectDisplay);
 }
 
-function onViewerMouseUp() {
+function onViewerMouseUp(e) {
   if (!previewTool.drawing) return;
   previewTool.drawing = false;
+
+  // Refresh modifier cursor classes based on the CURRENT key state — prevents
+  // a stuck '−' or '+' cursor if a modifier was released mid-drag outside the
+  // window and we missed the keyup event.
+  if (e) {
+    dom.viewerStage.classList.toggle('mod-add', !!e.shiftKey);
+    dom.viewerStage.classList.toggle('mod-sub', !!e.altKey && !e.shiftKey);
+  }
 
   const r = previewTool.rectDisplay;
   if (!r || r.w < 6 || r.h < 6) {
@@ -2434,11 +2879,11 @@ function onViewerMouseUp() {
     return;
   }
 
-  // Convert rect to image pixel coords and store as bounding box
   const disp = getDisplayedImageRect();
   if (!disp) return;
 
-  // Store box in normalized (0..1) coords so they work regardless of image resolution
+  // Store box in normalized (0..1) coords — will be converted to image pixels
+  // when sending to SAM (after encode returns the real image dimensions).
   segTool.box = {
     x1: (r.x - disp.left) / disp.width,
     y1: (r.y - disp.top) / disp.height,
@@ -2446,73 +2891,21 @@ function onViewerMouseUp() {
     y2: (r.y - disp.top + r.h) / disp.height,
   };
 
-  // Switch to add mode after drawing box
-  setSegMode('add');
   updateSegActionButtons();
-  updateSegStatus('Encoding image...');
 
-  // Trigger encode then predict
-  requestSegEncode().then(() => requestSegPrediction());
-}
-
-function onSegContextMenu(e) {
-  if (previewTool.active !== 'segment') return;
-  if (segTool.mode === 'box') return;
-
-  e.preventDefault();
-  const stageRect = dom.viewerStage.getBoundingClientRect();
-  const x = e.clientX - stageRect.left;
-  const y = e.clientY - stageRect.top;
-  const disp = getDisplayedImageRect();
-  if (!disp) return;
-
-  segTool.negativePoints.push({
-    x: (x - disp.left) / disp.width,
-    y: (y - disp.top) / disp.height,
-  });
-  renderSegPoints();
-  updateSegActionButtons();
-  requestSegPrediction();
-}
-
-// --- Rendering ---
-
-function renderSegPoints() {
-  const ctx = segTool.interCtx;
-  if (!ctx || !segTool.interCanvas) return;
-  const w = segTool.interCanvas.width;
-  const h = segTool.interCanvas.height;
-  ctx.clearRect(0, 0, w, h);
-
-  const disp = getDisplayedImageRect();
-  if (!disp) return;
-
-  // Draw bounding box on interaction canvas (all coords are normalized 0..1)
-  if (segTool.box) {
-    const bx1 = segTool.box.x1 * w;
-    const by1 = segTool.box.y1 * h;
-    const bx2 = segTool.box.x2 * w;
-    const by2 = segTool.box.y2 * h;
-
-    ctx.strokeStyle = '#ccc';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 3]);
-    ctx.strokeRect(bx1, by1, bx2 - bx1, by2 - by1);
-    ctx.setLineDash([]);
+  // For an "add" or "sub" drag, we need an existing mask to combine with.
+  // If none exists, silently treat it as a "new" selection.
+  if (segTool.dragOp !== 'new' && !segTool.currentMaskBase64) {
+    segTool.dragOp = 'new';
   }
 
-  // Positive points (green)
-  for (const pt of segTool.positivePoints) {
-    const cx = pt.x * w;
-    const cy = pt.y * h;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-    ctx.fillStyle = '#f44336';
-    ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
+  const opLabel = segTool.dragOp === 'add' ? 'Adding…'
+                : segTool.dragOp === 'sub' ? 'Subtracting…'
+                : 'Encoding image…';
+  updateSegStatus(opLabel);
+
+  // Run the SAM pipeline: encode (if needed) then predict for the new box
+  requestSegEncode().then(() => runSegPredictionForDrag());
 }
 
 function renderSegMask(maskPngBase64) {
@@ -2533,45 +2926,92 @@ function renderSegMask(maskPngBase64) {
 
     ctx.clearRect(0, 0, w, h);
 
-    // Draw mask scaled to canvas size
+    // Draw mask scaled to canvas size into a temp canvas
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = w;
     tempCanvas.height = h;
     const tempCtx = tempCanvas.getContext('2d');
     tempCtx.drawImage(img, 0, 0, w, h);
-    const imageData = tempCtx.getImageData(0, 0, w, h);
+    const src = tempCtx.getImageData(0, 0, w, h).data;
 
-    // Convert grayscale mask to fuchsia overlay (like Photoshop quick mask)
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const val = data[i];
-      if (val > 128) {
-        data[i] = 255;      // R
-        data[i + 1] = 0;    // G
-        data[i + 2] = 128;  // B
-        data[i + 3] = 140;  // A
-      } else {
-        data[i + 3] = 0;    // transparent
+    // Compute mask boundary pixels once and cache them. Animation just redraws
+    // the cached list with a shifting dash offset → smooth marching-ants effect.
+    function inside(x, y) {
+      if (x < 0 || x >= w || y < 0 || y >= h) return false;
+      return src[(y * w + x) * 4] > 128;
+    }
+
+    const edges = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!inside(x, y)) continue;
+        if (inside(x - 1, y) && inside(x + 1, y) && inside(x, y - 1) && inside(x, y + 1)) continue;
+        edges.push({ x, y, t: x + y });
       }
     }
 
-    ctx.putImageData(imageData, 0, 0);
+    segTool.edgePixels = edges;
+    segTool.edgeCanvasSize = { w, h };
+    segTool.antsOffset = 0;
+    startMarchingAntsAnimation();
   };
   img.src = `data:image/png;base64,${maskPngBase64}`;
 }
 
+// Redraw the cached edge pixels with the current dash offset.
+function drawMarchingAnts() {
+  if (!segTool.edgePixels || !segTool.maskCtx || !segTool.edgeCanvasSize) return;
+  const { w, h } = segTool.edgeCanvasSize;
+  if (w !== segTool.maskCanvas.width || h !== segTool.maskCanvas.height) return;
+
+  const ctx = segTool.maskCtx;
+  const out = ctx.createImageData(w, h);
+  const outData = out.data;
+  const DASH = 6;
+  const offset = segTool.antsOffset;
+
+  for (const p of segTool.edgePixels) {
+    const alt = Math.floor((p.t + offset) / DASH) % 2;
+    const color = alt === 0 ? 0 : 255;
+    // Draw 2×2 block for thickness
+    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1]]) {
+      const nx = p.x + dx, ny = p.y + dy;
+      if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+      const idx = (ny * w + nx) * 4;
+      outData[idx]     = color;
+      outData[idx + 1] = color;
+      outData[idx + 2] = color;
+      outData[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(out, 0, 0);
+}
+
+function startMarchingAntsAnimation() {
+  stopMarchingAntsAnimation();
+  segTool.antsLastTick = performance.now();
+  const tick = (now) => {
+    // Shift the dash phase ~1 pixel every ~60ms → comfortable crawl speed
+    if (now - segTool.antsLastTick >= 60) {
+      segTool.antsOffset = (segTool.antsOffset + 1) % 120;
+      segTool.antsLastTick = now;
+      drawMarchingAnts();
+    }
+    segTool.antsRAF = requestAnimationFrame(tick);
+  };
+  // Render the initial frame immediately
+  drawMarchingAnts();
+  segTool.antsRAF = requestAnimationFrame(tick);
+}
+
+function stopMarchingAntsAnimation() {
+  if (segTool.antsRAF) {
+    cancelAnimationFrame(segTool.antsRAF);
+    segTool.antsRAF = null;
+  }
+}
+
 // --- UI controls ---
-
-function setSegMode(mode) {
-  segTool.mode = mode;
-  updateSegModeButtons();
-}
-
-function updateSegModeButtons() {
-  document.getElementById('seg-mode-box').classList.toggle('active', segTool.mode === 'box');
-  document.getElementById('seg-mode-add').classList.toggle('active', segTool.mode === 'add');
-  document.getElementById('seg-mode-remove').classList.toggle('active', segTool.mode === 'remove');
-}
 
 function setSegBg(color) {
   segTool.bgColor = color;
@@ -2585,32 +3025,18 @@ function updateSegStatus(msg) {
 }
 
 function updateSegActionButtons() {
-  const hasPoints = segTool.positivePoints.length > 0 || segTool.negativePoints.length > 0;
   const hasBox = !!segTool.box;
   const hasMask = !!segTool.currentMaskBase64;
-  document.getElementById('seg-undo').disabled = !hasPoints;
-  document.getElementById('seg-clear').disabled = !hasBox && !hasPoints;
+  document.getElementById('seg-clear').disabled = !hasBox && !hasMask;
   document.getElementById('seg-apply').disabled = !hasMask;
-}
-
-function segUndo() {
-  // Pop the most recently added point (from either list)
-  if (segTool.negativePoints.length > 0 &&
-      (segTool.positivePoints.length === 0 ||
-       segTool.negativePoints.length >= segTool.positivePoints.length)) {
-    segTool.negativePoints.pop();
-  } else if (segTool.positivePoints.length > 0) {
-    segTool.positivePoints.pop();
-  }
-  renderSegPoints();
-  updateSegActionButtons();
-  if (segTool.box) requestSegPrediction();
+  // Rotation row only makes sense once a mask exists
+  const rotRow = document.getElementById('seg-rotation-row');
+  if (rotRow) rotRow.style.display = hasMask ? '' : 'none';
 }
 
 function segClear() {
   clearSegState();
-  setSegMode('box');
-  updateSegStatus('Draw a rectangle around the tablet to begin.');
+  updateSegStatus('Draw a box. Shift+draw to add, Alt+draw to subtract.');
 }
 
 // --- Backend communication (stubs until Phase 2-3 wired) ---
@@ -2667,45 +3093,112 @@ async function requestSegEncode() {
   previewTool.busy = false;
 }
 
-async function requestSegPrediction() {
-  if (!segTool.imageEncoded) return;
-  if (!segTool.box && segTool.positivePoints.length === 0) return;
-
+// Run SAM on the current box and combine the result with the existing mask
+// based on segTool.dragOp ('new' | 'add' | 'sub').
+async function runSegPredictionForDrag() {
+  if (!segTool.imageEncoded || !segTool.box) return;
   previewTool.busy = true;
 
   try {
-    // Convert normalized (0..1) coords to image pixels for SAM
+    // Convert normalized box to image pixel coords
     const iw = segTool.imageWidth;
     const ih = segTool.imageHeight;
-    const pixelBox = segTool.box ? {
+    const pixelBox = {
       x1: Math.round(segTool.box.x1 * iw),
       y1: Math.round(segTool.box.y1 * ih),
       x2: Math.round(segTool.box.x2 * iw),
       y2: Math.round(segTool.box.y2 * ih),
-    } : null;
-    const pixelPos = segTool.positivePoints.map(p => ({ x: Math.round(p.x * iw), y: Math.round(p.y * ih) }));
-    const pixelNeg = segTool.negativePoints.map(p => ({ x: Math.round(p.x * iw), y: Math.round(p.y * ih) }));
+    };
 
-    const result = await window.api.segPredictMask(
-      pixelBox,
-      pixelPos,
-      pixelNeg
-    );
-
-    if (result && result.mask) {
-      segTool.currentMaskBase64 = result.mask;
-      renderSegMask(result.mask);
-      const score = (result.score * 100).toFixed(1);
-      updateSegStatus(`Mask ready (score: ${score}%). Click to refine or Apply.`);
-      updateSegActionButtons();
-    } else {
+    // Predict the mask for ONLY the new box — no points
+    const result = await window.api.segPredictMask(pixelBox, [], []);
+    if (!result || !result.mask) {
       updateSegStatus(`Prediction failed: ${result?.error || 'unknown'}`);
+      previewTool.busy = false;
+      return;
     }
+
+    // Merge with the existing mask based on the drag operation
+    let finalMask;
+    if (segTool.dragOp === 'new' || !segTool.currentMaskBase64) {
+      finalMask = result.mask;
+    } else if (segTool.dragOp === 'add') {
+      finalMask = await mergeMasksBase64(segTool.currentMaskBase64, result.mask, 'union');
+    } else if (segTool.dragOp === 'sub') {
+      finalMask = await mergeMasksBase64(segTool.currentMaskBase64, result.mask, 'subtract');
+    } else {
+      finalMask = result.mask;
+    }
+
+    segTool.currentMaskBase64 = finalMask;
+    clearViewerRect();
+    renderSegMask(finalMask);
+
+    const verb = segTool.dragOp === 'add' ? 'Added to' : segTool.dragOp === 'sub' ? 'Subtracted from' : 'Created new';
+    updateSegStatus(`${verb} selection. Apply to save.`);
+    updateSegActionButtons();
+
+    // Reset dragOp after applying (so next plain drag defaults to 'new')
+    segTool.dragOp = 'new';
+    segTool.box = null;
   } catch (err) {
     updateSegStatus(`Prediction error: ${err.message}`);
   }
 
   previewTool.busy = false;
+}
+
+/**
+ * Merge two base64 grayscale PNG masks pixel-wise.
+ * op = 'union' (OR) | 'subtract' (A AND NOT B).
+ * Returns a new base64 PNG.
+ */
+function mergeMasksBase64(baseB64, newB64, op) {
+  return new Promise((resolve, reject) => {
+    const imgA = new Image();
+    const imgB = new Image();
+    let loaded = 0;
+    function onLoad() {
+      loaded++;
+      if (loaded < 2) return;
+
+      const w = Math.max(imgA.naturalWidth, imgB.naturalWidth);
+      const h = Math.max(imgA.naturalHeight, imgB.naturalHeight);
+      const canvasA = document.createElement('canvas');
+      const canvasB = document.createElement('canvas');
+      canvasA.width = w; canvasA.height = h;
+      canvasB.width = w; canvasB.height = h;
+      const ctxA = canvasA.getContext('2d');
+      const ctxB = canvasB.getContext('2d');
+      ctxA.drawImage(imgA, 0, 0, w, h);
+      ctxB.drawImage(imgB, 0, 0, w, h);
+      const dataA = ctxA.getImageData(0, 0, w, h);
+      const dataB = ctxB.getImageData(0, 0, w, h).data;
+      const a = dataA.data;
+
+      for (let i = 0; i < a.length; i += 4) {
+        const va = a[i] > 128 ? 255 : 0;
+        const vb = dataB[i] > 128 ? 255 : 0;
+        let v;
+        if (op === 'union') v = Math.max(va, vb);
+        else if (op === 'subtract') v = (va === 255 && vb === 0) ? 255 : 0;
+        else v = vb;
+        a[i] = a[i + 1] = a[i + 2] = v;
+        a[i + 3] = 255;
+      }
+
+      ctxA.putImageData(dataA, 0, 0);
+      const dataUrl = canvasA.toDataURL('image/png');
+      const b64 = dataUrl.split(',')[1];
+      resolve(b64);
+    }
+    imgA.onload = onLoad;
+    imgB.onload = onLoad;
+    imgA.onerror = reject;
+    imgB.onerror = reject;
+    imgA.src = `data:image/png;base64,${baseB64}`;
+    imgB.src = `data:image/png;base64,${newB64}`;
+  });
 }
 
 async function applySegMask() {
@@ -2719,11 +3212,12 @@ async function applySegMask() {
       viewerCurrentPath,
       null,  // main process computes _cleaned/ path
       segTool.currentMaskBase64,
-      segTool.bgColor
+      segTool.bgColor,
+      segTool.rotation
     );
 
     if (result && result.status === 'ok') {
-      updateSegStatus(`Saved to _cleaned/. Mask saved as _mask.png.`);
+      updateSegStatus(`Image saved. Mask saved as _mask.png.`);
       setStatus('Segmentation applied successfully.');
 
       if (result.thumbnail) {
@@ -2733,6 +3227,13 @@ async function applySegMask() {
           if (imgEl) imgEl.src = result.thumbnail;
         }
       }
+
+      // Reset segmentation state and reload the viewer with the new (cropped) file
+      clearSegState();
+      if (isViewerOpen()) {
+        await loadViewerImage(viewerCurrentPath);
+      }
+      refreshSegHistory();
     } else {
       updateSegStatus(`Apply error: ${result?.error || 'failed'}`);
     }
@@ -2776,22 +3277,56 @@ document.querySelectorAll('.tool-btn').forEach(btn => {
 });
 
 // Segment tool controls
-document.getElementById('seg-mode-box').addEventListener('click', () => setSegMode('box'));
-document.getElementById('seg-mode-add').addEventListener('click', () => setSegMode('add'));
-document.getElementById('seg-mode-remove').addEventListener('click', () => setSegMode('remove'));
 document.getElementById('seg-bg-white').addEventListener('click', () => setSegBg('white'));
 document.getElementById('seg-bg-black').addEventListener('click', () => setSegBg('black'));
-document.getElementById('seg-undo').addEventListener('click', segUndo);
 document.getElementById('seg-clear').addEventListener('click', segClear);
 document.getElementById('seg-apply').addEventListener('click', applySegMask);
+document.getElementById('seg-save').addEventListener('click', markSegSaved);
 document.getElementById('seg-opacity').addEventListener('input', (e) => {
   segTool.maskOpacity = e.target.value / 100;
   if (segTool.maskCanvas) segTool.maskCanvas.style.opacity = segTool.maskOpacity;
   document.getElementById('seg-opacity-value').textContent = `${e.target.value}%`;
 });
 
+// Rotation: slider + number input stay in sync; preview updates live
+function setSegRotation(val) {
+  const clamped = Math.max(-180, Math.min(180, Number(val) || 0));
+  segTool.rotation = clamped;
+  const slider = document.getElementById('seg-rotation');
+  const num = document.getElementById('seg-rotation-num');
+  // Only set if different to avoid feedback loops
+  if (slider && parseFloat(slider.value) !== clamped) slider.value = clamped;
+  if (num && parseFloat(num.value) !== clamped) num.value = clamped;
+  applySegRotationPreview();
+}
+document.getElementById('seg-rotation').addEventListener('input', (e) => setSegRotation(e.target.value));
+document.getElementById('seg-rotation-num').addEventListener('input', (e) => setSegRotation(e.target.value));
+document.getElementById('seg-rotation-reset').addEventListener('click', () => setSegRotation(0));
+
+// Modifier-key cursor feedback (only relevant when the segment tool is active)
+function updateSegModifierCursor(e) {
+  if (previewTool.active !== 'segment') {
+    dom.viewerStage.classList.remove('mod-add', 'mod-sub');
+    return;
+  }
+  dom.viewerStage.classList.toggle('mod-add', !!e.shiftKey);
+  dom.viewerStage.classList.toggle('mod-sub', !!e.altKey && !e.shiftKey);
+}
+window.addEventListener('keydown', updateSegModifierCursor);
+window.addEventListener('keyup', updateSegModifierCursor);
+// On window focus or mouse entering the stage, assume no modifiers are held
+// unless explicit key events say otherwise.
+window.addEventListener('blur', () => dom.viewerStage.classList.remove('mod-add', 'mod-sub'));
+dom.viewerStage.addEventListener('mouseenter', () => dom.viewerStage.classList.remove('mod-add', 'mod-sub'));
+
 dom.viewerStage.addEventListener('mousedown', onViewerMouseDown);
-dom.viewerStage.addEventListener('contextmenu', onSegContextMenu);
+// Zoom (wheel) and pan (middle-mouse) on the viewer
+dom.viewerStage.addEventListener('wheel', onViewerWheel, { passive: false });
+dom.viewerStage.addEventListener('mousedown', onViewerPanStart);
+window.addEventListener('mousemove', onViewerPanMove);
+window.addEventListener('mouseup', onViewerPanEnd);
+// Disable the default context menu on the stage so middle/right-click pans cleanly
+dom.viewerStage.addEventListener('auxclick', (e) => e.preventDefault());
 window.addEventListener('mousemove', onViewerMouseMove);
 window.addEventListener('mouseup', onViewerMouseUp);
 

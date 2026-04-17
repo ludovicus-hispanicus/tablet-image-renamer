@@ -9,3 +9,8 @@ build/
 .env
 .DS_Store
 Thumbs.db
+# Python artifacts
+python/__pycache__/
+python/weights/
+__pycache__/
+*.pyc

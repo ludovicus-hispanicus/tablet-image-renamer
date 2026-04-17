@@ -13,8 +13,8 @@
     <span id="folder-path">No folder selected</span>
     <span id="subfolder-info"></span>
     <div id="mode-toggle">
-      <button id="btn-mode-renamer" class="mode-btn">Renamer</button>
       <button id="btn-mode-picker" class="mode-btn active">Picker</button>
+      <button id="btn-mode-renamer" class="mode-btn">Renamer</button>
     </div>
     <div id="subfolder-nav">
       <button id="btn-prev" disabled>&larr; Prev</button>
@@ -35,6 +35,7 @@
     <!-- Tree View: Subfolder Navigation -->
     <aside id="panel-tree">
       <div id="tree-header">Folders</div>
+      <input type="text" id="tree-search" placeholder="Search folders..." autocomplete="off" />
       <div id="tree-list"></div>
     </aside>
 
@@ -250,12 +251,6 @@
         <div class="tools-section" id="tool-options-segment">
           <div class="tools-section-label">Segment Options</div>
           <div class="tool-options-row">
-            <label>Mode:</label>
-            <button class="seg-mode-btn active" id="seg-mode-box" title="Draw bounding box (B)">Box</button>
-            <button class="seg-mode-btn" id="seg-mode-add" title="Add region (A)">+ Add</button>
-            <button class="seg-mode-btn" id="seg-mode-remove" title="Remove region (R)">&minus; Remove</button>
-          </div>
-          <div class="tool-options-row">
             <label>Opacity:</label>
             <input type="range" id="seg-opacity" min="0" max="100" value="50" />
             <span id="seg-opacity-value">50%</span>
@@ -265,12 +260,25 @@
             <button class="bg-swatch active" id="seg-bg-white" title="White background"></button>
             <button class="bg-swatch bg-black-swatch" id="seg-bg-black" title="Black background"></button>
           </div>
+          <div class="tool-options-row" id="seg-rotation-row" style="display: none;">
+            <label>Rotate:</label>
+            <input type="range" id="seg-rotation" min="-45" max="45" step="0.1" value="0" />
+            <input type="number" id="seg-rotation-num" min="-180" max="180" step="0.1" value="0" title="Fine rotation in degrees" />
+            <button id="seg-rotation-reset" class="seg-action-btn" title="Reset rotation" style="padding: 2px 6px; flex: 0;">0</button>
+          </div>
           <div class="seg-actions">
-            <button class="seg-action-btn" id="seg-undo" disabled>Undo</button>
             <button class="seg-action-btn" id="seg-clear" disabled>Clear</button>
             <button class="seg-action-btn seg-action-primary" id="seg-apply" disabled>Apply</button>
           </div>
-          <div id="seg-status" class="tools-hint">Draw a rectangle around the tablet to begin.</div>
+          <div class="seg-actions">
+            <button class="seg-action-btn" id="seg-save" title="Mark as done. History will be cleaned up on next app start.">&#x1F4BE; Save</button>
+          </div>
+          <div id="seg-status" class="tools-hint">Draw a box. Shift+draw to add, Alt+draw to subtract.</div>
+        </div>
+
+        <div class="tools-section" id="seg-history-section">
+          <div class="tools-section-label">History</div>
+          <div id="seg-history-list" class="seg-history-empty">No history yet.</div>
         </div>
 
         <div class="tools-section">
@@ -396,6 +404,7 @@
         <button class="preview-btn" id="result-toggle-revision" title="Mark for revision (R)">&#x1F534; Revision</button>
         <button class="preview-btn" id="result-toggle-updated" title="Mark as updated (U)">&#x1F7E2; Updated</button>
         <button class="preview-btn" id="result-toggle-sent" title="Sent to stitcher">&#x1F7E1; Sent</button>
+        <button class="preview-btn" id="result-preview-edit" title="Edit selected images for this tablet">&#x270E;</button>
         <button class="preview-btn" id="result-preview-reveal" title="Reveal in Explorer">&#x1F4C2;</button>
         <button id="result-preview-close">&times;</button>
       </div>

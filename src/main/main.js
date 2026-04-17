@@ -12,6 +12,70 @@ const {
 const projectManager = require('./project-manager');
 const segBridge = require('./segmentation-bridge');
 
+// Disable Sharp's file cache so that overwritten files are re-read fresh.
+// Without this, the segmentation apply/restore can show stale images because
+// Sharp serves the old buffer from its in-memory cache.
+try {
+  require('sharp').cache({ files: 0, items: 0 });
+} catch (e) { /* sharp may not be installed in some dev setups */ }
+
+// === Segmentation saved-histories list ===
+// When the user clicks "Save" on a segmented image, we add its path here.
+// On the NEXT app startup, those histories are deleted and the list cleared.
+const os = require('os');
+function getSavedHistoriesFile() {
+  const userData = process.env.APPDATA
+    || (process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support') : path.join(os.homedir(), '.config'));
+  const dir = path.join(userData, 'tablet-image-renamer');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'saved-histories.json');
+}
+
+function readSavedHistories() {
+  const f = getSavedHistoriesFile();
+  if (!fs.existsSync(f)) return [];
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')) || []; } catch (e) { return []; }
+}
+
+function writeSavedHistories(list) {
+  try { fs.writeFileSync(getSavedHistoriesFile(), JSON.stringify(list, null, 2)); } catch (e) { /* ignore */ }
+}
+
+/**
+ * Delete all history files for an image: _Original/{name}_step*.ext and
+ * {name}.current marker. Removes the _Original/ folder if empty afterwards.
+ */
+function deleteHistoryFor(imagePath) {
+  const dir = path.join(path.dirname(imagePath), '_Original');
+  if (!fs.existsSync(dir)) return;
+  const base = path.parse(imagePath).name;
+  const ext = path.extname(imagePath);
+  const escBase = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escExt = ext.replace(/[.]/g, '\\.');
+  const stepPattern = new RegExp(`^${escBase}_step\\d+${escExt}$`, 'i');
+  const markerName = `${base}.current`;
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (f === markerName || stepPattern.test(f)) {
+        try { fs.unlinkSync(path.join(dir, f)); } catch (e) { /* ignore */ }
+      }
+    }
+    // Remove folder if empty
+    if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  } catch (e) { /* ignore */ }
+}
+
+// At startup: clean up all histories marked for deletion in the previous session
+(function cleanupSavedHistoriesOnStartup() {
+  const list = readSavedHistories();
+  if (list.length === 0) return;
+  console.log(`[seg] Cleaning ${list.length} saved histories from previous session`);
+  for (const imagePath of list) {
+    try { deleteHistoryFor(imagePath); } catch (e) { /* ignore */ }
+  }
+  writeSavedHistories([]);
+})();
+
 // Hot reload in dev mode — watches renderer files (HTML, CSS, JS)
 try {
   require('electron-reload')(path.join(__dirname, '..', 'renderer'), {
@@ -78,16 +142,20 @@ ipcMain.handle('rename-files', async (event, subfolder, assignments, tabletId, a
   return renameFiles(subfolder, assignments, tabletId, allImagePaths);
 });
 
-ipcMain.handle('rotate-image', async (event, imagePath, degrees) => {
+// Bake EXIF orientation into pixels, then apply the explicit rotation.
+// Sharp's .rotate(angle) with an explicit angle does NOT auto-apply EXIF,
+// so without this two-pass the first rotation on an EXIF-tagged image
+// combines with the orientation tag and looks off (e.g. 180° looks like 90°).
+async function rotateAndSave(imagePath, degrees) {
   const sharp = require('sharp');
+  const oriented = await sharp(imagePath).rotate().toBuffer();
+  const buffer = await sharp(oriented).rotate(degrees).toBuffer();
+  fs.writeFileSync(imagePath, buffer);
+}
+
+ipcMain.handle('rotate-image', async (event, imagePath, degrees) => {
   try {
-    const buffer = await sharp(imagePath)
-      .rotate(degrees)
-      .toBuffer();
-    // Overwrite the original file
-    const fs = require('fs');
-    fs.writeFileSync(imagePath, buffer);
-    // Return new thumbnail
+    await rotateAndSave(imagePath, degrees);
     return generateThumbnail(imagePath);
   } catch (err) {
     console.error('Error rotating image:', err.message);
@@ -96,15 +164,10 @@ ipcMain.handle('rotate-image', async (event, imagePath, degrees) => {
 });
 
 ipcMain.handle('rotate-images-batch', async (event, imagePaths, degrees) => {
-  const sharp = require('sharp');
   const results = [];
   for (const imagePath of imagePaths) {
     try {
-      const buffer = await sharp(imagePath)
-        .rotate(degrees)
-        .toBuffer();
-      const fs = require('fs');
-      fs.writeFileSync(imagePath, buffer);
+      await rotateAndSave(imagePath, degrees);
       const thumb = await generateThumbnail(imagePath);
       results.push({ path: imagePath, thumbnail: thumb, status: 'ok' });
     } catch (err) {
@@ -273,14 +336,21 @@ ipcMain.handle('scan-selected-folder', async (event, folderPath) => {
   const imageExts = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.cr3', '.nef', '.arw']);
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    // Skip underscore-prefixed folders (_Final_JPG, _Final_TIFF, _Raw, _cleaned, etc.)
+    if (entry.name.startsWith('_')) continue;
     const subPath = path.join(folderPath, entry.name);
     const files = fs.readdirSync(subPath);
-    const imageFiles = files.filter(f => imageExts.has(path.extname(f).toLowerCase()));
+    const imageFiles = files.filter(f =>
+      imageExts.has(path.extname(f).toLowerCase()) &&
+      !/_mask\.(png|tif|tiff|jpg|jpeg)$/i.test(f)
+    );
     if (imageFiles.length > 0) {
       results.push({ name: entry.name, path: subPath, imageCount: imageFiles.length });
     }
   }
-  results.sort((a, b) => a.name.localeCompare(b.name));
+  results.sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+  );
   return results;
 });
 
@@ -396,69 +466,270 @@ ipcMain.handle('seg-predict-mask', async (event, box, positivePoints, negativePo
   return segBridge.predictMask(box, positivePoints, negativePoints);
 });
 
-ipcMain.handle('seg-apply-mask', async (event, imagePath, outputPath, maskBase64, bgColor) => {
-  // Apply mask using Sharp (local, no HTTP to Python needed)
+// === Segmentation history helpers ===
+// Photoshop-style linear history: each Apply adds a step. Jumping to an older
+// step does NOT create a new entry; it just moves the current pointer. If the
+// user then applies a new change from an older step, the "future" steps are
+// discarded (redo chain broken).
+
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function historyDir(imagePath) { return path.join(path.dirname(imagePath), '_Original'); }
+function stepFilePath(imagePath, step) {
+  return path.join(historyDir(imagePath), `${path.parse(imagePath).name}_step${step}${path.extname(imagePath)}`);
+}
+function currentMarkerPath(imagePath) {
+  return path.join(historyDir(imagePath), `${path.parse(imagePath).name}.current`);
+}
+
+function listSteps(imagePath) {
+  const dir = historyDir(imagePath);
+  if (!fs.existsSync(dir)) return [];
+  const base = path.parse(imagePath).name;
+  const ext = path.extname(imagePath);
+  const pattern = new RegExp(`^${escapeRe(base)}_step(\\d+)${escapeRe(ext)}$`, 'i');
+  const steps = [];
+  for (const f of fs.readdirSync(dir)) {
+    const m = f.match(pattern);
+    if (!m) continue;
+    const full = path.join(dir, f);
+    const stat = fs.statSync(full);
+    steps.push({ step: parseInt(m[1]), path: full, name: f, mtime: stat.mtime.toISOString(), size: stat.size });
+  }
+  steps.sort((a, b) => a.step - b.step);
+  return steps;
+}
+
+function getCurrentStep(imagePath) {
+  const marker = currentMarkerPath(imagePath);
+  if (!fs.existsSync(marker)) return -1;
+  const n = parseInt(fs.readFileSync(marker, 'utf8').trim());
+  return isNaN(n) ? -1 : n;
+}
+
+function setCurrentStep(imagePath, step) {
+  fs.mkdirSync(historyDir(imagePath), { recursive: true });
+  fs.writeFileSync(currentMarkerPath(imagePath), String(step));
+}
+
+/**
+ * Prepare history for an upcoming Apply. Returns the new step number that
+ * should be written AFTER the apply finishes. Side effects:
+ *  - If this is the first apply ever, snapshots the current file as step0.
+ *  - If the user has jumped back (current < max), discards all future steps.
+ */
+function prepareHistoryForApply(imagePath) {
+  fs.mkdirSync(historyDir(imagePath), { recursive: true });
+  const steps = listSteps(imagePath);
+  if (steps.length === 0) {
+    // First apply ever → snapshot the original as step0
+    fs.copyFileSync(imagePath, stepFilePath(imagePath, 0));
+    setCurrentStep(imagePath, 0);
+    return 1;
+  }
+  const current = getCurrentStep(imagePath);
+  const maxStep = steps[steps.length - 1].step;
+  if (current >= 0 && current < maxStep) {
+    // User jumped back — discard steps beyond current
+    for (const s of steps) {
+      if (s.step > current) { try { fs.unlinkSync(s.path); } catch (e) { /* ignore */ } }
+    }
+    return current + 1;
+  }
+  return maxStep + 1;
+}
+
+ipcMain.handle('seg-get-history', async (event, imagePath) => {
+  const steps = listSteps(imagePath);
+  const current = getCurrentStep(imagePath);
+  return { steps, current };
+});
+
+ipcMain.handle('seg-mark-saved', async (event, imagePath) => {
+  // Add this image path to the cleanup list. History will actually be deleted
+  // on the NEXT app startup, so the user can still undo within this session.
+  try {
+    const list = readSavedHistories();
+    if (!list.includes(imagePath)) list.push(imagePath);
+    writeSavedHistories(list);
+    return { status: 'ok' };
+  } catch (err) {
+    return { status: 'error', error: err.message };
+  }
+});
+
+ipcMain.handle('seg-is-saved', async (event, imagePath) => {
+  const list = readSavedHistories();
+  return { saved: list.includes(imagePath) };
+});
+
+ipcMain.handle('seg-jump-to-step', async (event, imagePath, step) => {
+  try {
+    const stepPath = stepFilePath(imagePath, step);
+    if (!fs.existsSync(stepPath)) return { status: 'error', error: `Step ${step} not found` };
+    fs.copyFileSync(stepPath, imagePath);
+    setCurrentStep(imagePath, step);
+    // Remove stale _mask.png
+    const maskPath = path.join(path.dirname(imagePath), path.parse(imagePath).name + '_mask.png');
+    if (fs.existsSync(maskPath)) { try { fs.unlinkSync(maskPath); } catch (e) { /* ignore */ } }
+    const thumb = await generateThumbnail(imagePath);
+    return { status: 'ok', thumbnail: thumb, current: step };
+  } catch (err) {
+    console.error('seg-jump-to-step error:', err);
+    return { status: 'error', error: err.message };
+  }
+});
+
+ipcMain.handle('seg-apply-mask', async (event, imagePath, outputPath, maskBase64, bgColor, rotation) => {
+  // Apply SAM mask: cut out the object, fill bg with chosen color, crop tight
+  // to the object, then add 100px padding of the bg color on all sides.
+  // Before cropping, the mask is EXPANDED (dilated) and FEATHERED (blurred) to
+  // match the Photoshop action that the professional uses — so edges aren't
+  // cut into the object and the cutout blends smoothly.
+  // Result overwrites the original file. A backup is saved to _Original/ first.
   const sharp = require('sharp');
+  const PADDING_PX = 100;
+  const EXPAND_PX = 1;    // dilate the mask outward by this many pixels
+  const FEATHER_PX = 2;   // Gaussian blur sigma for soft edges
 
   try {
-    // Compute output path: {tabletFolder}/_cleaned/{stem}.tif
-    if (!outputPath) {
-      const folder = path.dirname(imagePath);
-      const cleanedDir = path.join(folder, '_cleaned');
-      if (!fs.existsSync(cleanedDir)) fs.mkdirSync(cleanedDir, { recursive: true });
-      outputPath = path.join(cleanedDir, path.parse(imagePath).name + '.tif');
-    }
+    // Prepare history: snapshot original on first apply, discard future steps
+    // if the user jumped back in history, and compute the new step number.
+    const newStep = prepareHistoryForApply(imagePath);
+    console.log(`[seg-apply] will write step ${newStep}`);
 
     // Decode the base64 mask PNG
     const maskBuf = Buffer.from(maskBase64, 'base64');
 
-    // Load and auto-rotate the original image to a buffer
+    // Load and auto-rotate the original image; grab its true dimensions
     const rotatedBuf = await sharp(imagePath, { limitInputPixels: false })
       .rotate()
       .removeAlpha()
       .toBuffer();
-
-    // Get the actual post-rotation dimensions
     const rotatedMeta = await sharp(rotatedBuf).metadata();
     const imgW = rotatedMeta.width;
     const imgH = rotatedMeta.height;
 
-    // Resize mask to match the actual image dimensions
-    const maskResized = await sharp(maskBuf)
+    // Resize mask to image dimensions, then apply Expand + Feather on it.
+    // Expand: dilation via a Gaussian-like widening. Sharp doesn't have dilate,
+    // so approximate: threshold-blur-threshold expands by the blur radius.
+    // Feather: a final Gaussian blur softens the edge.
+    const expandKernel = Math.max(1, EXPAND_PX * 2 + 1);
+    const maskAtImgSize = await sharp(maskBuf)
       .resize(imgW, imgH, { fit: 'fill', kernel: 'nearest' })
-      .ensureAlpha()
+      .blur(EXPAND_PX)
+      .threshold(64)     // threshold low → any blurred edge becomes foreground = expansion
+      .blur(FEATHER_PX)  // soft feather edge on the expanded mask
       .toBuffer();
+
+    // Get raw grayscale mask pixels (single channel, 0-255)
+    const { data: maskRaw, info: maskInfo } = await sharp(maskAtImgSize)
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    // Find tight bbox of the mask (where pixels > 128)
+    let minX = imgW, minY = imgH, maxX = -1, maxY = -1;
+    for (let y = 0; y < maskInfo.height; y++) {
+      for (let x = 0; x < maskInfo.width; x++) {
+        if (maskRaw[y * maskInfo.width + x] > 128) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) return { status: 'error', error: 'Mask is empty' };
+
+    const bboxW = maxX - minX + 1;
+    const bboxH = maxY - minY + 1;
 
     const bg = bgColor === 'black'
-      ? { r: 0, g: 0, b: 0, alpha: 255 }
-      : { r: 255, g: 255, b: 255, alpha: 255 };
+      ? { r: 0, g: 0, b: 0 }
+      : { r: 255, g: 255, b: 255 };
 
-    // Composite: solid background + image + mask-as-alpha, then flatten
-    const result = await sharp({
-      create: { width: imgW, height: imgH, channels: 4, background: bg },
-    })
-      .composite([
-        { input: rotatedBuf, blend: 'over' },
-        { input: maskResized, blend: 'dest-in' },
-      ])
-      .flatten({ background: { r: bg.r, g: bg.g, b: bg.b } })
-      .tiff({ compression: 'lzw' })
+    // Get raw RGB pixels from the rotated image
+    const { data: rgbRaw, info: rgbInfo } = await sharp(rotatedBuf)
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    // Build RGB buffer with ALPHA-BLENDED edges so the feather is actually
+    // visible as a soft fade (rather than a hard threshold cutoff):
+    //   out = image * (mask/255) + bg * (1 - mask/255)
+    const totalPx = imgW * imgH;
+    const rgbaFlat = Buffer.alloc(totalPx * 3);
+    for (let i = 0; i < totalPx; i++) {
+      const a = maskRaw[i] / 255;
+      const inv = 1 - a;
+      rgbaFlat[i * 3]     = Math.round(rgbRaw[i * 3]     * a + bg.r * inv);
+      rgbaFlat[i * 3 + 1] = Math.round(rgbRaw[i * 3 + 1] * a + bg.g * inv);
+      rgbaFlat[i * 3 + 2] = Math.round(rgbRaw[i * 3 + 2] * a + bg.b * inv);
+    }
+
+    // Encode the masked image as PNG so downstream pipeline can read it
+    const masked = await sharp(rgbaFlat, {
+      raw: { width: imgW, height: imgH, channels: 3 },
+    }).png().toBuffer();
+
+    // Step 2 + 3: crop tight, then extend canvas by 100px of bg color.
+    // Write directly to the target format in one pipeline — avoids intermediate
+    // buffers with ambiguous formats.
+    const ext = path.extname(imagePath).toLowerCase();
+
+    // Step 2: crop tight to mask bbox.
+    let cropped = await sharp(masked)
+      .extract({ left: minX, top: minY, width: bboxW, height: bboxH })
+      .png()
       .toBuffer();
 
-    fs.writeFileSync(outputPath, result);
+    // Step 3: fine rotation (if any). Sharp's rotate() with a background
+    // expands the canvas automatically to contain the rotated content.
+    const rot = Number(rotation) || 0;
+    if (Math.abs(rot) > 0.001) {
+      cropped = await sharp(cropped)
+        .rotate(rot, { background: { ...bg, alpha: 1 } })
+        .png()
+        .toBuffer();
+    }
 
-    // Save the mask alongside the original
+    // Step 4: add 100px bg-color padding on all sides + encode to target format.
+    let pipeline = sharp(cropped)
+      .extend({
+        top: PADDING_PX,
+        bottom: PADDING_PX,
+        left: PADDING_PX,
+        right: PADDING_PX,
+        background: bg,
+      });
+
+    if (ext === '.tif' || ext === '.tiff') {
+      pipeline = pipeline.tiff({ compression: 'lzw' });
+    } else if (ext === '.png') {
+      pipeline = pipeline.png();
+    } else {
+      pipeline = pipeline.jpeg({ quality: 95 });
+    }
+    const outBuf = await pipeline.toBuffer();
+    fs.writeFileSync(imagePath, outBuf);
+
+    // Snapshot the new live file as the new history step and update the pointer
+    fs.copyFileSync(imagePath, stepFilePath(imagePath, newStep));
+    setCurrentStep(imagePath, newStep);
+
+    // Save the mask alongside the (now-cropped) image for stitcher reference
     const maskPath = path.join(path.dirname(imagePath), path.parse(imagePath).name + '_mask.png');
     fs.writeFileSync(maskPath, maskBuf);
 
-    // Generate thumbnail for the UI
     const thumb = await generateThumbnail(imagePath);
 
     return {
       status: 'ok',
-      output_path: outputPath,
+      output_path: imagePath,
       mask_path: maskPath,
       thumbnail: thumb,
+      width: bboxW + 2 * PADDING_PX,
+      height: bboxH + 2 * PADDING_PX,
     };
   } catch (err) {
     console.error('seg-apply-mask error:', err);

@@ -215,9 +215,33 @@ main {
   flex-shrink: 0;
 }
 
+#tree-search {
+  margin: 4px 8px 6px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  flex-shrink: 0;
+}
+
+#tree-search:focus {
+  border-color: var(--accent);
+}
+
+#tree-search::placeholder {
+  color: var(--text-dim);
+}
+
 #tree-list {
   overflow-y: auto;
   flex: 1;
+}
+
+.tree-item.hidden-by-search {
+  display: none;
 }
 
 .tree-item {
@@ -972,6 +996,10 @@ main {
   border-color: #ff9800;
 }
 
+.result-card.finished {
+  border-color: #f5f5f5;
+}
+
 .result-card.selected.revision {
   border-color: var(--highlight);
   box-shadow: 0 0 0 2px var(--highlight), 0 0 0 4px #f44336;
@@ -985,6 +1013,11 @@ main {
 .result-card.selected.sent {
   border-color: var(--highlight);
   box-shadow: 0 0 0 2px var(--highlight), 0 0 0 4px #ff9800;
+}
+
+.result-card.selected.finished {
+  border-color: var(--highlight);
+  box-shadow: 0 0 0 2px var(--highlight), 0 0 0 4px #f5f5f5;
 }
 
 .result-card img {
@@ -1013,7 +1046,8 @@ main {
 
 .result-card.revision .result-badge,
 .result-card.updated .result-badge,
-.result-card.sent .result-badge {
+.result-card.sent .result-badge,
+.result-card.finished .result-badge {
   display: block;
 }
 
@@ -1098,6 +1132,13 @@ main {
   max-width: 92vw;
   max-height: 88vh;
   object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;  /* events pass through to the overlay for pan/zoom */
+}
+
+#result-preview-overlay {
+  cursor: grab;
 }
 
 #result-notes {
@@ -1441,6 +1482,17 @@ main {
   cursor: crosshair;
 }
 
+/* Modifier-key cursor hints: + for Shift (add), − for Alt (subtract) */
+#viewer-stage.tool-segment.mod-add,
+#viewer-stage.tool-segment.mod-add #seg-canvas-interaction {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M12 2v20M2 12h20" stroke="black" stroke-width="1.5"/><path d="M12 3v18M3 12h18" stroke="white" stroke-width="0.8"/><circle cx="18" cy="18" r="5" fill="%234caf50" stroke="white" stroke-width="1"/><path d="M18 15v6M15 18h6" stroke="white" stroke-width="1.5"/></svg>') 12 12, crosshair;
+}
+
+#viewer-stage.tool-segment.mod-sub,
+#viewer-stage.tool-segment.mod-sub #seg-canvas-interaction {
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M12 2v20M2 12h20" stroke="black" stroke-width="1.5"/><path d="M12 3v18M3 12h18" stroke="white" stroke-width="0.8"/><circle cx="18" cy="18" r="5" fill="%23f44336" stroke="white" stroke-width="1"/><path d="M15 18h6" stroke="white" stroke-width="1.5"/></svg>') 12 12, crosshair;
+}
+
 #viewer-image {
   max-width: 100%;
   max-height: 100%;
@@ -1448,6 +1500,11 @@ main {
   user-select: none;
   -webkit-user-drag: none;
   pointer-events: none;
+}
+
+/* Grab cursor on the viewer stage when no tool is active (pan mode) */
+#viewer-stage:not(.tool-segment) {
+  cursor: grab;
 }
 
 .viewer-nav {
@@ -1719,8 +1776,134 @@ main {
   min-width: 28px;
 }
 
+#seg-rotation {
+  width: 80px;
+  accent-color: var(--accent);
+}
+
+#seg-rotation-num {
+  width: 60px;
+  padding: 3px 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 3px;
+  font-size: 11px;
+}
+
 #seg-status {
   margin-top: 8px;
+}
+
+#seg-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.seg-history-empty {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.seg-history-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.seg-history-item:hover:not(.seg-history-current) {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.seg-history-item.seg-history-current {
+  border-color: var(--accent);
+  background: rgba(91, 155, 213, 0.18);
+  cursor: default;
+}
+
+.seg-history-marker {
+  width: 10px;
+  color: var(--accent);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+/* Status dropdown (tree item status selector) */
+.status-dropdown {
+  position: fixed;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px;
+  z-index: 200;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  min-width: 130px;
+}
+
+.status-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.status-dropdown-item:hover {
+  background: var(--bg);
+}
+
+.status-dropdown-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.status-dropdown-badge {
+  width: 16px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.seg-history-item .seg-history-label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+}
+
+.seg-history-item .seg-history-time {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.seg-history-item button {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.seg-history-item button:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 #tool-info {

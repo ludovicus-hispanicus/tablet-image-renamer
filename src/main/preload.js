@@ -47,8 +47,12 @@ contextBridge.exposeInMainWorld('api', {
   segStopServer: () => ipcRenderer.invoke('seg-stop-server'),
   segEncodeImage: (imagePath) => ipcRenderer.invoke('seg-encode-image', imagePath),
   segPredictMask: (box, posPoints, negPoints) => ipcRenderer.invoke('seg-predict-mask', box, posPoints, negPoints),
-  segApplyMask: (imagePath, outputPath, maskBase64, bgColor) => ipcRenderer.invoke('seg-apply-mask', imagePath, outputPath, maskBase64, bgColor),
+  segApplyMask: (imagePath, outputPath, maskBase64, bgColor, rotation) => ipcRenderer.invoke('seg-apply-mask', imagePath, outputPath, maskBase64, bgColor, rotation),
   segServerStatus: () => ipcRenderer.invoke('seg-server-status'),
+  segGetHistory: (imagePath) => ipcRenderer.invoke('seg-get-history', imagePath),
+  segJumpToStep: (imagePath, step) => ipcRenderer.invoke('seg-jump-to-step', imagePath, step),
+  segMarkSaved: (imagePath) => ipcRenderer.invoke('seg-mark-saved', imagePath),
+  segIsSaved: (imagePath) => ipcRenderer.invoke('seg-is-saved', imagePath),
   onSegProgress: (callback) => ipcRenderer.on('seg-progress', (event, data) => callback(data)),
   offSegProgress: () => ipcRenderer.removeAllListeners('seg-progress'),
 });
